@@ -38,7 +38,7 @@ if 'all_months_data' not in st.session_state:
         st.session_state.all_months_data[m] = df
 
 # 3. Desain Antarmuka (UI) Aplikasi
-st.title("📊 Aplikasi Absensi Digital - Kelas 7A")
+st.title("📊 Aplikasi Absensi Digital - Kelas 7F")
 st.write("Kelola absensi kelas secara interaktif. Anda dapat menambah, mengubah, atau menghapus nama siswa langsung di tabel bawah.")
 
 # Pilihan Bulan di Sidebar
