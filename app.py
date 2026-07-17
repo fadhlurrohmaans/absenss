@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 # Konfigurasi halaman agar tampilan melebar (Wide Mode)
-st.set_page_config(layout="wide", page_title="Absensi Kelas 7A")
+st.set_page_config(layout="wide", page_title="Absensi Kelas 7F")
 
 # 1. Daftar Bulan & Database Nama Siswa Awal dari Excel Anda
 months = ['JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER', 'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI']
