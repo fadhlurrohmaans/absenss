@@ -32,11 +32,9 @@ month_map = {
     'JULI': 7, 'AGUSTUS': 8, 'SEPTEMBER': 9, 'OKTOBER': 10, 'NOVEMBER': 11, 'DESEMBER': 12
 }
 
-# Fungsi Pembantu Menentukan Tahun Berdasarkan Bulan (Tahun Ajaran Aktif 2026/2027)
 def get_year_for_month(month_name):
     return 2026 if month_map[month_name] >= 7 else 2027
 
-# Contoh daftar nama awal untuk pengisian otomatis lembar baru
 initial_students = ['ACHMAD FAIRUZ', 'ADARA DWI NOVITA', 'ADELAMULIA PUTRI FAJARINO', 'AHMAD DENIS RUBIANSYAH']
 
 # --- 1. KONEKSI GOOGLE SHEETS ---
@@ -179,7 +177,6 @@ if 'user_role' not in st.session_state:
 if 'assigned_class' not in st.session_state:
     st.session_state.assigned_class = None
 
-# Tampilan Kontrol di Sidebar
 st.sidebar.title("🏢 Menu Utama Sekolah")
 
 if st.session_state.logged_in:
@@ -197,7 +194,6 @@ if not st.session_state.logged_in:
     
     with st.form(key="login_form_mobile"):
         role = st.selectbox("Pilih Hak Akses Peran:", ["Guru Kelas", "Guru Piket", "Administrator System"])
-        
         target_class = None
         if role == "Guru Kelas":
             target_class = st.selectbox("Pilih Kelas Anda:", classes)
@@ -253,7 +249,7 @@ else:
                 col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
         return col_config, disabled_cols
 
-    # A. DASHBOARD HALAMAN GURU KELAS (CRUD + AUTO SYNC NAMA)
+    # A. DASHBOARD HALAMAN GURU KELAS (CRUD + AUTO SYNC PERBAIKAN)
     if st.session_state.user_role == "Guru Kelas":
         my_class = st.session_state.assigned_class
         st.title(f"🏫 Ruang Kerja Kelas {my_class}")
@@ -261,7 +257,7 @@ else:
         selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
         col_config, disabled_cols = get_calendar_config(selected_month)
         
-        # Memuat Data
+        # Memuat Data awal sebelum terjadi manipulasi form
         current_data = get_attendance_data(my_class, selected_month)
         
         st.write("---")
@@ -269,6 +265,16 @@ else:
         st.info("💡 **Fitur Pintar Aktif**: Mengubah, menambah, atau menghapus nama siswa di sini akan otomatis menyelaraskan daftar nama siswa di 11 bulan lainnya saat Anda menekan tombol Simpan!")
         
         editor_key = f"crud_{my_class}_{selected_month}"
+        
+        # 🔥 KUNCI PERBAIKAN: Amankan snapshot log perubahan SEBELUM st.data_editor dijalankan ulang
+        raw_changes = {}
+        if editor_key in st.session_state:
+            raw_changes = {
+                "edited_rows": st.session_state[editor_key].get("edited_rows", {}).copy(),
+                "added_rows": st.session_state[editor_key].get("added_rows", []).copy(),
+                "deleted_rows": st.session_state[editor_key].get("deleted_rows", []).copy()
+            }
+        
         edited_df = st.data_editor(
             current_data,
             num_rows="dynamic",
@@ -279,49 +285,63 @@ else:
         )
         
         if st.button("💾 Simpan Permanen ke Cloud", type="primary"):
-            with st.spinner("Mengunggah data & menyelaraskan nama siswa ke seluruh bulan..."):
-                # 1. Simpan lembar kerja bulan saat ini terlebih dahulu
+            with st.spinner("Mengunggah data & mengunci keselarasan nama siswa..."):
+                # 1. Simpan lembar kerja bulan aktif saat ini
                 save_attendance_data(my_class, selected_month, edited_df)
                 
-                # 2. Deteksi riwayat modifikasi nama dari metadata data_editor
-                state_changes = st.session_state.get(editor_key, {})
-                edited_rows = state_changes.get("edited_rows", {})
-                added_rows = state_changes.get("added_rows", [])
-                deleted_rows = state_changes.get("deleted_rows", [])
+                # 2. Ambil log modifikasi nama dari snapshot aman yang kita buat sebelumnya
+                edited_rows = raw_changes.get("edited_rows", {})
+                added_rows = raw_changes.get("added_rows", [])
+                deleted_rows = raw_changes.get("deleted_rows", [])
                 
-                # Filter hanya perubahan yang menyangkut kolom 'Nama Siswa'
                 name_updates = {int(k): v["Nama Siswa"] for k, v in edited_rows.items() if "Nama Siswa" in v}
-                
                 has_structural_change = len(name_updates) > 0 or len(added_rows) > 0 or len(deleted_rows) > 0
                 
-                # 3. Jika terdeteksi ada perubahan nama/baris, lakukan penyeimbangan ke 11 bulan lainnya
+                # 3. Eksekusi sinkronisasi terstruktur ke 11 bulan lainnya HANYA JIKA ada manipulasi nama
                 if has_structural_change:
                     for m in months:
                         if m == selected_month:
                             continue
                         
-                        # Ambil data lama bulan target
                         df_m = get_attendance_data(my_class, m)
                         
-                        # A. Eksekusi Rename secara posisional
+                        # A. Eksekusi Rename (Ubah Nama)
                         for row_idx, new_name in name_updates.items():
                             if row_idx < len(df_m):
                                 df_m.loc[row_idx, 'Nama Siswa'] = new_name
                         
-                        # B. Eksekusi Hapus Siswa (Delete Row)
+                        # B. Eksekusi Hapus Row (Delete dari indeks terbesar ke terkecil agar tidak merusak baris)
                         if deleted_rows:
-                            valid_deletes = [d for d in deleted_rows if d < len(df_m)]
-                            df_m = df_m.drop(index=valid_deletes).reset_index(drop=True)
+                            sorted_deletes = sorted([int(d) for d in deleted_rows], reverse=True)
+                            for d in sorted_deletes:
+                                if d < len(df_m):
+                                    df_m = df_m.drop(index=d)
+                            df_m = df_m.reset_index(drop=True)
                         
-                        # C. Eksekusi Tambah Siswa Baru (Add Row)
+                        # C. Eksekusi Tambah Siswa Baru (Add Row) dengan menyamakan kalender libur bulan target
                         if added_rows:
-                            new_students = [{"Nama Siswa": a.get("Nama Siswa", "")} for a in added_rows]
-                            df_m = pd.concat([df_m, pd.DataFrame(new_students)], ignore_index=True)
+                            for new_row in added_rows:
+                                new_name = new_row.get("Nama Siswa", "")
+                                new_row_data = {"Nama Siswa": new_name}
+                                
+                                year_m = get_year_for_month(m)
+                                month_num_m = month_map[m]
+                                _, max_days_m = calendar.monthrange(year_m, month_num_m)
+                                
+                                for i in range(1, 32):
+                                    col = f"Tgl {i}"
+                                    if i > max_days_m:
+                                        new_row_data[col] = '-'
+                                    else:
+                                        dt = datetime.date(year_m, month_num_m, i)
+                                        new_row_data[col] = 'L' if dt.weekday() in [5, 6] else ''
+                                        
+                                df_m = pd.concat([df_m, pd.DataFrame([new_row_data])], ignore_index=True)
                         
-                        # Simpan kembali perubahan struktur nama pada bulan target
+                        # Simpan pembaruan struktur nama pada bulan target
                         save_attendance_data(my_class, m, df_m)
                         
-            st.success("🎉 Sukses! Data absensi disimpan dan seluruh daftar nama siswa di semua bulan telah diselaraskan!")
+            st.success("🎉 Sukses! Seluruh data absensi disimpan dan daftar nama siswa di semua bulan telah selaras 100%!")
             
         # Live Rekap
         st.write("---")
