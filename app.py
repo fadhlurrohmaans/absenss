@@ -3,6 +3,8 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import io
+import datetime
+import calendar
 
 # Konfigurasi Halaman Web agar Responsif
 st.set_page_config(layout="wide", page_title="Sistem Absensi Sekolah Digital")
@@ -24,6 +26,16 @@ st.markdown("""
 classes = [f"{grade}{letter}" for grade in [7, 8, 9] for letter in ['A', 'B', 'C', 'D', 'E', 'F']]
 months = ['JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER', 'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI']
 date_cols = [f"Tgl {i}" for i in range(1, 32)]
+
+month_map = {
+    'JANUARI': 1, 'FEBRUARI': 2, 'MARET': 3, 'APRIL': 4, 'MEI': 5, 'JUNI': 6,
+    'JULI': 7, 'AGUSTUS': 8, 'SEPTEMBER': 9, 'OKTOBER': 10, 'NOVEMBER': 11, 'DESEMBER': 12
+}
+
+# Fungsi Pembantu Menentukan Tahun Berdasarkan Bulan (Tahun Ajaran Aktif)
+def get_year_for_month(month_name):
+    # Juli - Desember masuk tahun 2026, Januari - Juni masuk tahun 2027
+    return 2026 if month_map[month_name] >= 7 else 2027
 
 # Contoh daftar nama awal untuk pengisian otomatis lembar baru
 initial_students = ['ACHMAD FAIRUZ', 'ADARA DWI NOVITA', 'ADELAMULIA PUTRI FAJARINO', 'AHMAD DENIS RUBIANSYAH']
@@ -66,21 +78,48 @@ def save_config_passwords(password_dict):
 # --- 3. MANAGEMENT DATA ABSENSI ---
 def get_attendance_data(kelas, month):
     sheet_name = f"{kelas}_{month}"
+    year = get_year_for_month(month)
+    month_num = month_map[month]
+    _, max_days = calendar.monthrange(year, month_num)
+    
     try:
         ws = sh.worksheet(sheet_name)
         data = ws.get_all_records()
         if not data:
             raise gspread.exceptions.WorksheetNotFound
         df = pd.DataFrame(data)
-        for col in date_cols:
+        
+        # Sinkronisasi kolom tanggal & otomatisasi hari libur kalender jika sel kosong
+        for i in range(1, 32):
+            col = f"Tgl {i}"
             if col not in df.columns:
-                df[col] = ''
+                if i > max_days:
+                    df[col] = '-'
+                else:
+                    dt = datetime.date(year, month_num, i)
+                    df[col] = 'L' if dt.weekday() in [5, 6] else ''
+            else:
+                if i > max_days:
+                    df[col] = '-'
+                else:
+                    dt = datetime.date(year, month_num, i)
+                    if dt.weekday() in [5, 6]:
+                        df[col] = df[col].apply(lambda x: 'L' if str(x).strip() in ['', 'None', 'nan'] else x)
+                        
         return df[['Nama Siswa'] + date_cols]
     except gspread.exceptions.WorksheetNotFound:
         ws = sh.add_worksheet(title=sheet_name, rows="100", cols="40")
         df = pd.DataFrame(columns=['Nama Siswa'] + date_cols)
         df['Nama Siswa'] = initial_students
-        df[date_cols] = ''
+        
+        for i in range(1, 32):
+            col = f"Tgl {i}"
+            if i > max_days:
+                df[col] = '-'
+            else:
+                dt = datetime.date(year, month_num, i)
+                df[col] = 'L' if dt.weekday() in [5, 6] else ''
+                
         ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
         return df
 
@@ -88,6 +127,24 @@ def save_attendance_data(kelas, month, df):
     sheet_name = f"{kelas}_{month}"
     ws = sh.worksheet(sheet_name)
     ws.clear()
+    
+    year = get_year_for_month(month)
+    month_num = month_map[month]
+    _, max_days = calendar.monthrange(year, month_num)
+    
+    # Proteksi baris baru agar hari libur & tanggal tidak valid tetap otomatis terisi saat disimpan
+    df = df.copy()
+    for i in range(1, 32):
+        col = f"Tgl {i}"
+        if i > max_days:
+            df[col] = '-'
+        else:
+            dt = datetime.date(year, month_num, i)
+            if dt.weekday() in [5, 6]:
+                df[col] = df[col].apply(lambda x: 'L' if str(x).strip() in ['', 'None', 'nan'] else x)
+            else:
+                df[col] = df[col].apply(lambda x: '' if str(x).strip() in ['None', 'nan'] else x)
+                
     df = df.fillna('')
     df = df.astype(str)
     data_to_write = [df.columns.values.tolist()] + df.values.tolist()
@@ -106,6 +163,8 @@ def generate_full_report(df):
         s = vals.count('S') + vals.count('SAKIT')
         i = vals.count('I') + vals.count('IJIN') + vals.count('IZIN')
         a = vals.count('A') + vals.count('ALPHA') + vals.count('ALPA')
+        
+        # Hadir dihitung jika kosong, tanda titik, atau kata HADIR (Huruf 'L' dan '-' otomatis dilewati)
         h = vals.count('') + vals.count('.') + vals.count('HADIR')
         
         total = s + i + a + h
@@ -141,11 +200,9 @@ if not st.session_state.logged_in:
     st.title("🔐 Sistem Keamanan Absensi Digital")
     st.write("Silakan pilih peran dan masukkan password untuk mengakses dashboard.")
     
-    # Gunakan Form agar Keyboard HP tidak memicu refresh aplikasi secara konstan
     with st.form(key="login_form_mobile"):
         role = st.selectbox("Pilih Hak Akses Peran:", ["Guru Kelas", "Guru Piket", "Administrator System"])
         
-        # Pilihan dinamis kelas muncul hanya jika memilih Guru Kelas
         target_class = None
         if role == "Guru Kelas":
             target_class = st.selectbox("Pilih Kelas Anda:", classes)
@@ -179,25 +236,53 @@ if not st.session_state.logged_in:
 
 # --- LOGIKA DATA TAMPILAN JIKA SUDAH BERHASIL LOGIN ---
 else:
-    # A. DASHBOARD HALAMAN GURU KELAS (CRUD AKTIF)
+    # Generasi Konfigurasi Kalender Dinamis Berdasarkan Bulan yang Dipilih
+    def get_calendar_config(selected_month):
+        year = get_year_for_month(selected_month)
+        month_num = month_map[selected_month]
+        _, max_days = calendar.monthrange(year, month_num)
+        days_id = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Mig"]
+        
+        disabled_cols = []
+        col_config = {}
+        
+        for i in range(1, 32):
+            col_name = f"Tgl {i}"
+            if i > max_days:
+                disabled_cols.append(col_name)
+                col_config[col_name] = st.column_config.TextColumn(label=f"{i} (-)")
+            else:
+                dt = datetime.date(year, month_num, i)
+                day_name = days_id[dt.weekday()]
+                if dt.weekday() in [5, 6]: # 5 = Sabtu, 6 = Minggu
+                    disabled_cols.append(col_name)
+                col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
+        return col_config, disabled_cols
+
+    # A. DASHBOARD HALAMAN GURU KELAS (CRUD AKTIF DENGAN KUNCI HARI LIBUR)
     if st.session_state.user_role == "Guru Kelas":
         my_class = st.session_state.assigned_class
         st.title(f"🏫 Ruang Kerja Kelas {my_class}")
         
         selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
         
+        # Ambil konfigurasi kalender & kolom yang wajib dikunci (Sabtu, Minggu & Tanggal Invalid)
+        col_config, disabled_cols = get_calendar_config(selected_month)
+        
         # Memuat Data
         current_data = get_attendance_data(my_class, selected_month)
         
         st.write("---")
         st.subheader("📝 Papan Lembar Absensi")
-        st.info("📱 Tip Pengguna HP: Geser tabel ke samping kanan/kiri untuk melihat kolom tanggal lengkap.")
+        st.info("ℹ️ Kolom **Sabtu & Minggu (Sab/Mig)** otomatis terisi **L** dan dikunci agar tidak bisa diedit.")
         
-        # Data Editor interaktif untuk Guru Kelas
+        # Data Editor interaktif dengan proteksi kolom libur
         edited_df = st.data_editor(
             current_data,
             num_rows="dynamic",
             use_container_width=True,
+            column_config=col_config,
+            disabled=disabled_cols,
             key=f"crud_{my_class}_{selected_month}"
         )
         
@@ -212,10 +297,9 @@ else:
         full_report = generate_full_report(edited_df)
         st.dataframe(full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '%']], use_container_width=True)
 
-    # B. DASHBOARD HALAMAN GURU PIKET (READ-ONLY KUNCI DATA)
+    # B. DASHBOARD HALAMAN GURU PIKET (READ-ONLY KUNCI DATA + INFO HARI)
     elif st.session_state.user_role == "Guru Piket":
         st.title("🕵️‍♂️ Dashboard Peninjauan Guru Piket")
-        st.write("Anda memiliki hak akses baca untuk memantau seluruh kelas hari ini.")
         
         col_p1, col_p2 = st.columns(2)
         with col_p1:
@@ -223,6 +307,8 @@ else:
         with col_p2:
             piket_month = st.selectbox("📅 Pilih Bulan:", months)
             
+        col_config, _ = get_calendar_config(piket_month)
+        
         # Memuat Data
         raw_data = get_attendance_data(piket_class, piket_month)
         calculated_data = generate_full_report(raw_data)
@@ -231,8 +317,8 @@ else:
         st.subheader(f"📊 Laporan Real-Time Kehadiran Kelas {piket_class} ({piket_month})")
         st.warning("⚠️ Mode Guru Piket: Pembatasan aktif. Data dikunci dari segala jenis perubahan manual.")
         
-        # Menggunakan st.dataframe biasa (Bukan Data Editor) agar 100% Read-Only & sangat ringan digeser di HP
-        st.dataframe(calculated_data, use_container_width=True)
+        # Tampilan tabel monitoring lengkap dengan info hari di header kolom
+        st.dataframe(calculated_data, use_container_width=True, column_config=col_config)
 
     # C. DASHBOARD HALAMAN ADMIN
     elif st.session_state.user_role == "Admin":
