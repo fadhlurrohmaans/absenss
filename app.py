@@ -52,7 +52,7 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Google Sheets: {e}")
     st.stop()
 
-# --- 2. MANAGEMENT DATABASE MASTER NAMA (DENGAN CACHING API) ---
+# --- 2. MANAGEMENT DATABASE MASTER NAMA (CACHED) ---
 @st.cache_data(ttl=15)
 def get_all_master_df():
     try:
@@ -76,7 +76,6 @@ def get_all_master_df():
             ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
             return df
         except Exception:
-            # Fallback aman jika sheet baru saja dibuat
             df = pd.DataFrame(columns=classes)
             for c in classes:
                 df[c] = initial_students + [""] * (150 - len(initial_students))
@@ -100,7 +99,7 @@ def save_master_students(kelas, name_list):
     ws = sh.worksheet("MASTER_SISWA")
     ws.clear()
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
-    st.cache_data.clear() # Reset cache agar data langsung diperbarui
+    st.cache_data.clear()
 
 # --- 3. MANAGEMENT PASSWORD DATABASE (CONFIG) ---
 @st.cache_data(ttl=60)
@@ -130,7 +129,7 @@ def save_config_passwords(password_dict):
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     st.cache_data.clear()
 
-# --- 4. MANAGEMENT DATA ABSENSI (DENGAN CACHING API) ---
+# --- 4. MANAGEMENT DATA ABSENSI BULANAN (CACHED) ---
 @st.cache_data(ttl=15)
 def get_attendance_data(kelas, month):
     sheet_name = f"{kelas}_{month}"
@@ -186,31 +185,93 @@ def save_attendance_data(kelas, month, df):
     df = df.astype(str)
     data_to_write = [df.columns.values.tolist()] + df.values.tolist()
     ws.update(range_name='A1', values=data_to_write)
-    st.cache_data.clear() # Reset cache agar data yang disimpan langsung sinkron
+    st.cache_data.clear()
 
+# --- 5. PERHITUNGAN REKAP ABSENSI BULANAN & TAHUNAN ---
 def generate_full_report(df):
     df_report = df.copy()
     df_report[date_cols] = df_report[date_cols].fillna('')
+    
+    # Deteksi Tanggal Efektif yang Sudah Mulai Diisi Absensinya
+    active_date_cols = []
+    for col in date_cols:
+        vals = [str(v).strip().upper() for v in df_report[col].values]
+        has_entry = any(v in ['H', 'HADIR', 'S', 'SAKIT', 'I', 'IJIN', 'IZIN', 'A', 'ALPHA', 'ALPA', '.', 'V'] for v in vals)
+        if has_entry:
+            active_date_cols.append(col)
+            
     s_list, i_list, a_list, h_list, pct_list = [], [], [], [], []
     
     for _, row in df_report.iterrows():
-        if pd.isna(row['Nama Siswa']) or str(row['Nama Siswa']).strip() in ["", "(Siswa Belum Diisi di Tab Kelola)"]:
+        nama = str(row['Nama Siswa']).strip()
+        if pd.isna(row['Nama Siswa']) or nama in ["", "(Siswa Belum Diisi di Tab Kelola)"]:
             s_list.append(0); i_list.append(0); a_list.append(0); h_list.append(0); pct_list.append("0%")
             continue
-        vals = [str(v).strip().upper() for v in row[date_cols].values]
-        s = vals.count('S') + vals.count('SAKIT')
-        i = vals.count('I') + vals.count('IJIN') + vals.count('IZIN')
-        a = vals.count('A') + vals.count('ALPHA') + vals.count('ALPA')
-        h = vals.count('') + vals.count('.') + vals.count('HADIR')
-        
+            
+        s, i, a, h = 0, 0, 0, 0
+        if not active_date_cols:
+            s_list.append(0); i_list.append(0); a_list.append(0); h_list.append(0); pct_list.append("0%")
+            continue
+            
+        for col in active_date_cols:
+            val = str(row[col]).strip().upper()
+            if val in ['S', 'SAKIT']:
+                s += 1
+            elif val in ['I', 'IJIN', 'IZIN']:
+                i += 1
+            elif val in ['A', 'ALPHA', 'ALPA']:
+                a += 1
+            elif val in ['H', 'HADIR', '.', 'V', '']:
+                h += 1
+                
         total = s + i + a + h
         pct = (h / total * 100) if total > 0 else 0.0
         s_list.append(s); i_list.append(i); a_list.append(a); h_list.append(h); pct_list.append(f"{pct:.0f}%")
         
-    df_report['S'] = s_list; df_report['I'] = i_list; df_report['A'] = a_list; df_report['Hadir'] = h_list; df_report['%'] = pct_list
+    df_report['S'] = s_list
+    df_report['I'] = i_list
+    df_report['A'] = a_list
+    df_report['Hadir'] = h_list
+    df_report['%'] = pct_list
     return df_report
 
-# --- 5. SISTEM OTENTIKASI & LOGIN ---
+@st.cache_data(ttl=15)
+def get_yearly_recap(kelas):
+    master_names = get_master_students(kelas)
+    recap = {name: {'S': 0, 'I': 0, 'A': 0, 'Hadir': 0} for name in master_names}
+    
+    for m in months:
+        df_m = get_attendance_data(kelas, m)
+        rep_m = generate_full_report(df_m)
+        for _, row in rep_m.iterrows():
+            nama = str(row['Nama Siswa']).strip()
+            if nama in recap:
+                recap[nama]['S'] += int(row['S'])
+                recap[nama]['I'] += int(row['I'])
+                recap[nama]['A'] += int(row['A'])
+                recap[nama]['Hadir'] += int(row['Hadir'])
+                
+    rows = []
+    for idx, nama in enumerate(master_names, 1):
+        s = recap[nama]['S']
+        i = recap[nama]['I']
+        a = recap[nama]['A']
+        h = recap[nama]['Hadir']
+        tot = s + i + a + h
+        pct = (h / tot * 100) if tot > 0 else 0.0
+        rows.append({
+            'No': idx,
+            'Nama Siswa': nama,
+            'Sakit (S)': s,
+            'Izin (I)': i,
+            'Alpha (A)': a,
+            'Total Hadir (H)': h,
+            'Total Hari Efektif': tot,
+            '% Kehadiran': f"{pct:.0f}%"
+        })
+    return pd.DataFrame(rows)
+
+# --- 6. SISTEM OTENTIKASI & LOGIN ---
 passwords = get_config_passwords()
 
 if 'logged_in' not in st.session_state:
@@ -297,7 +358,11 @@ else:
         my_class = st.session_state.assigned_class
         st.title(f"🏫 Ruang Kerja Kelas {my_class}")
         
-        tab_absen, tab_nama = st.tabs(["📝 Isi Absensi Bulanan", "👥 Kelola Daftar Master Siswa"])
+        tab_absen, tab_rekap, tab_nama = st.tabs([
+            "📝 Isi Absensi Bulanan", 
+            "📊 Rekap Seluruh Bulan (1 Tahun)", 
+            "👥 Kelola Daftar Master Siswa"
+        ])
         
         with tab_absen:
             selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
@@ -324,9 +389,15 @@ else:
                 st.rerun()
                 
             st.write("---")
-            st.subheader("📋 Ringkasan Kehadiran Otomatis")
+            st.subheader("📋 Ringkasan Kehadiran Bulan Ini")
             full_report = generate_full_report(edited_df)
             st.dataframe(full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '%']], use_container_width=True)
+
+        with tab_rekap:
+            st.subheader(f"📊 Rekapitulasi Kehadiran Akumulasi Seluruh Bulan (Kelas {my_class})")
+            st.info("💡 Data di bawah mencakup gabungan seluruh bulan (Juli s.d. Juni) secara real-time.")
+            yearly_df = get_yearly_recap(my_class)
+            st.dataframe(yearly_df, use_container_width=True, hide_index=True)
 
         with tab_nama:
             st.subheader(f"👥 Pusat Pengaturan Siswa Kelas {my_class}")
@@ -353,20 +424,28 @@ else:
     elif st.session_state.user_role == "Guru Piket":
         st.title("🕵️‍♂️ Dashboard Peninjauan Guru Piket")
         
-        col_p1, col_p2 = st.columns(2)
-        with col_p1:
-            piket_class = st.selectbox("🏫 Pantau Kelas:", classes)
-        with col_p2:
-            piket_month = st.selectbox("📅 Pilih Bulan:", months)
+        tab_piket_bulanan, tab_piket_tahunan = st.tabs(["📅 Laporan Bulanan", "📊 Rekap Akumulasi Seluruh Bulan"])
+        
+        with tab_piket_bulanan:
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                piket_class = st.selectbox("🏫 Pantau Kelas:", classes, key="piket_c_m")
+            with col_p2:
+                piket_month = st.selectbox("📅 Pilih Bulan:", months, key="piket_m_m")
+                
+            col_config, _ = get_calendar_config(piket_month)
+            raw_data = get_attendance_data(piket_class, piket_month)
+            calculated_data = generate_full_report(raw_data)
             
-        col_config, _ = get_calendar_config(piket_month)
-        
-        raw_data = get_attendance_data(piket_class, piket_month)
-        calculated_data = generate_full_report(raw_data)
-        
-        st.write("---")
-        st.subheader(f"📊 Laporan Real-Time Kehadiran Kelas {piket_class} ({piket_month})")
-        st.dataframe(calculated_data, use_container_width=True, column_config=col_config)
+            st.write("---")
+            st.subheader(f"📊 Laporan Real-Time Kehadiran Kelas {piket_class} ({piket_month})")
+            st.dataframe(calculated_data, use_container_width=True, column_config=col_config)
+
+        with tab_piket_tahunan:
+            piket_class_year = st.selectbox("🏫 Pilih Kelas untuk Rekapitulasi Tahunan:", classes, key="piket_c_y")
+            st.subheader(f"📊 Rekapitulasi Total Kehadiran Kelas {piket_class_year} (12 Bulan)")
+            yearly_piket_df = get_yearly_recap(piket_class_year)
+            st.dataframe(yearly_piket_df, use_container_width=True, hide_index=True)
 
     # C. DASHBOARD HALAMAN ADMIN
     elif st.session_state.user_role == "Admin":
