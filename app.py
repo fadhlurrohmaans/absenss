@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from gspread.exceptions import WorksheetNotFound, APIError
 import io
 import datetime
 import calendar
@@ -51,13 +52,14 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Google Sheets: {e}")
     st.stop()
 
-# --- 2. MANAGEMENT DATABASE MASTER NAMA (MASTER_SISWA) ---
+# --- 2. MANAGEMENT DATABASE MASTER NAMA (DENGAN CACHING API) ---
+@st.cache_data(ttl=15)
 def get_all_master_df():
     try:
         ws = sh.worksheet("MASTER_SISWA")
         data = ws.get_all_values()
         if not data:
-            raise gspread.exceptions.WorksheetNotFound
+            raise WorksheetNotFound
         headers = data[0]
         rows = data[1:]
         df = pd.DataFrame(rows, columns=headers)
@@ -65,13 +67,20 @@ def get_all_master_df():
             if c not in df.columns:
                 df[c] = ""
         return df
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title="MASTER_SISWA", rows="150", cols="30")
-        df = pd.DataFrame(columns=classes)
-        for c in classes:
-            df[c] = initial_students + [""] * (150 - len(initial_students))
-        ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
-        return df
+    except (WorksheetNotFound, APIError):
+        try:
+            ws = sh.add_worksheet(title="MASTER_SISWA", rows="150", cols="30")
+            df = pd.DataFrame(columns=classes)
+            for c in classes:
+                df[c] = initial_students + [""] * (150 - len(initial_students))
+            ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+            return df
+        except Exception:
+            # Fallback aman jika sheet baru saja dibuat
+            df = pd.DataFrame(columns=classes)
+            for c in classes:
+                df[c] = initial_students + [""] * (150 - len(initial_students))
+            return df
 
 def get_master_students(kelas):
     df = get_all_master_df()
@@ -85,43 +94,50 @@ def save_master_students(kelas, name_list):
     df = get_all_master_df()
     name_list = [str(n).strip() for n in name_list if str(n).strip() != ""]
     
-    # Reset kolom kelas ini dengan data baru, sisanya di-pad dengan string kosong
     df[kelas] = pd.Series(name_list)
     df = df.fillna("")
     
     ws = sh.worksheet("MASTER_SISWA")
     ws.clear()
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+    st.cache_data.clear() # Reset cache agar data langsung diperbarui
 
 # --- 3. MANAGEMENT PASSWORD DATABASE (CONFIG) ---
+@st.cache_data(ttl=60)
 def get_config_passwords():
     try:
         ws = sh.worksheet("CONFIG")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
         return dict(zip(df['Key'], df['Password']))
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title="CONFIG", rows="30", cols="5")
-        keys = ['Admin', 'Guru Piket'] + classes
-        default_passwords = ['admin123', 'piket123'] + [f"{c.lower()}123" for c in classes]
-        df = pd.DataFrame({'Key': keys, 'Password': default_passwords})
-        ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
-        return dict(zip(df['Key'], df['Password']))
+    except (WorksheetNotFound, APIError):
+        try:
+            ws = sh.add_worksheet(title="CONFIG", rows="30", cols="5")
+            keys = ['Admin', 'Guru Piket'] + classes
+            default_passwords = ['admin123', 'piket123'] + [f"{c.lower()}123" for c in classes]
+            df = pd.DataFrame({'Key': keys, 'Password': default_passwords})
+            ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+            return dict(zip(df['Key'], df['Password']))
+        except Exception:
+            keys = ['Admin', 'Guru Piket'] + classes
+            default_passwords = ['admin123', 'piket123'] + [f"{c.lower()}123" for c in classes]
+            return dict(zip(keys, default_passwords))
 
 def save_config_passwords(password_dict):
     ws = sh.worksheet("CONFIG")
     ws.clear()
     df = pd.DataFrame(list(password_dict.items()), columns=['Key', 'Password'])
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+    st.cache_data.clear()
 
-# --- 4. MANAGEMENT DATA ABSENSI MENGGUNAKAN INDEKS REFERENSI ---
+# --- 4. MANAGEMENT DATA ABSENSI (DENGAN CACHING API) ---
+@st.cache_data(ttl=15)
 def get_attendance_data(kelas, month):
     sheet_name = f"{kelas}_{month}"
     year = get_year_for_month(month)
     month_num = month_map[month]
     _, max_days = calendar.monthrange(year, month_num)
     
-    # PANGGIL REFERENSI INDUK
     master_names = get_master_students(kelas)
     if not master_names:
         master_names = ["(Siswa Belum Diisi di Tab Kelola)"]
@@ -130,10 +146,9 @@ def get_attendance_data(kelas, month):
         ws = sh.worksheet(sheet_name)
         data = ws.get_all_records()
         df_stored = pd.DataFrame(data)
-    except gspread.exceptions.WorksheetNotFound:
+    except Exception:
         df_stored = pd.DataFrame(columns=['Nama Siswa'] + date_cols)
         
-    # Bangun ulang struktur DataFrame secara runtime berbasis POSISI INDEKS Master Nama
     df_new = pd.DataFrame(columns=['Nama Siswa'] + date_cols)
     df_new['Nama Siswa'] = master_names
     
@@ -147,7 +162,6 @@ def get_attendance_data(kelas, month):
             
             col_values = []
             for idx in range(len(master_names)):
-                # Jika baris data tersimpan di posisi indeks ini ada, ambil isinya
                 if idx < len(df_stored) and col in df_stored.columns:
                     val = str(df_stored.loc[idx, col]).strip()
                     if val in ['', 'None', 'nan', 'L', '-']:
@@ -155,7 +169,6 @@ def get_attendance_data(kelas, month):
                     else:
                         col_values.append(val)
                 else:
-                    # Jika baris baru hasil penambahan di lembar master
                     col_values.append('L' if is_weekend else '')
             df_new[col] = col_values
             
@@ -165,7 +178,7 @@ def save_attendance_data(kelas, month, df):
     sheet_name = f"{kelas}_{month}"
     try:
         ws = sh.worksheet(sheet_name)
-    except gspread.exceptions.WorksheetNotFound:
+    except Exception:
         ws = sh.add_worksheet(title=sheet_name, rows="100", cols="40")
         
     ws.clear()
@@ -173,6 +186,7 @@ def save_attendance_data(kelas, month, df):
     df = df.astype(str)
     data_to_write = [df.columns.values.tolist()] + df.values.tolist()
     ws.update(range_name='A1', values=data_to_write)
+    st.cache_data.clear() # Reset cache agar data yang disimpan langsung sinkron
 
 def generate_full_report(df):
     df_report = df.copy()
@@ -283,23 +297,20 @@ else:
         my_class = st.session_state.assigned_class
         st.title(f"🏫 Ruang Kerja Kelas {my_class}")
         
-        # MEMBUAT DUA SUB-TAB KERJA (ABSENSI vs KELOLA NAMA)
         tab_absen, tab_nama = st.tabs(["📝 Isi Absensi Bulanan", "👥 Kelola Daftar Master Siswa"])
         
         with tab_absen:
             selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
             col_config, disabled_cols = get_calendar_config(selected_month)
             
-            # Load Data Absen (Otomatis mengadopsi susunan Master Nama terbaru)
             current_data = get_attendance_data(my_class, selected_month)
             
             st.subheader("📝 Papan Lembar Absensi")
             st.caption("Catatan: Kolom Nama Siswa & Hari Libur dikunci otomatis demi keselarasan data.")
             
-            # Kolom Nama Siswa di-KUNCI (disabled) agar tidak bisa dirubah di tab absen!
             edited_df = st.data_editor(
                 current_data,
-                num_rows="fixed", # Jumlah baris dikunci mengikuti jumlah master nama
+                num_rows="fixed",
                 use_container_width=True,
                 column_config=col_config,
                 disabled=["Nama Siswa"] + disabled_cols,
@@ -310,8 +321,8 @@ else:
                 with st.spinner("Mengunci absensi ke cloud..."):
                     save_attendance_data(my_class, selected_month, edited_df)
                 st.success(f"🎉 Absensi Kelas {my_class} untuk bulan {selected_month} berhasil diamankan!")
+                st.rerun()
                 
-            # Live Rekap
             st.write("---")
             st.subheader("📋 Ringkasan Kehadiran Otomatis")
             full_report = generate_full_report(edited_df)
@@ -321,13 +332,12 @@ else:
             st.subheader(f"👥 Pusat Pengaturan Siswa Kelas {my_class}")
             st.info("Menambah, menghapus, atau mengganti ejaan nama di sini akan otomatis merubah seluruh lembar 12 bulan absensi kelas Anda.")
             
-            # Ambil list nama dari database induk
             current_masters = get_master_students(my_class)
             df_masters = pd.DataFrame(current_masters, columns=["Nama Siswa"])
             
             edited_masters = st.data_editor(
                 df_masters,
-                num_rows="dynamic", # Di sini guru bisa menambah/menghapus baris siswa bebas
+                num_rows="dynamic",
                 use_container_width=True,
                 key=f"master_edit_workspace_{my_class}"
             )
@@ -337,7 +347,7 @@ else:
                     new_names_list = edited_masters["Nama Siswa"].dropna().tolist()
                     save_master_students(my_class, new_names_list)
                 st.success("🎉 Berhasil! Nama siswa diselaraskan mutlak di seluruh kalender bulan.")
-                st.cache_resource.clear()
+                st.rerun()
 
     # B. DASHBOARD HALAMAN GURU PIKET (READ-ONLY)
     elif st.session_state.user_role == "Guru Piket":
@@ -376,7 +386,7 @@ else:
                 new_passwords = dict(zip(edited_config['Nama Akun / Kelas'], edited_config['Password']))
                 save_config_passwords(new_passwords)
                 st.success("🔒 Seluruh password baru berhasil diterapkan di sistem cloud!")
-                st.cache_resource.clear()
+                st.rerun()
                 
         with tab_master_all:
             st.subheader("📊 Database Induk Nama Siswa Seluruh Kelas")
@@ -394,5 +404,6 @@ else:
                     ws = sh.worksheet("MASTER_SISWA")
                     ws.clear()
                     ws.update(range_name='A1', values=[df_cleaned.columns.values.tolist()] + df_cleaned.values.tolist())
+                    st.cache_data.clear()
                 st.success("🔒 Database pusat 18 kelas sekolah berhasil dikunci!")
-                st.cache_resource.clear()
+                st.rerun()
