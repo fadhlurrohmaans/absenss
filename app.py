@@ -3,11 +3,10 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import WorksheetNotFound, APIError
-import io
 import datetime
 import calendar
 
-# Konfigurasi Halaman Web agar Responsif
+# Konfigurasi Halaman Web
 st.set_page_config(layout="wide", page_title="Sistem Absensi Sekolah Digital")
 
 # Mengatur CSS Khusus agar Tampilan Tabel Lebih Nyaman Digeser di Layar HP
@@ -18,7 +17,8 @@ st.markdown("""
     }
     .stButton>button {
         width: 100%;
-        margin-top: 10px;
+        margin-top: 8px;
+        margin-bottom: 8px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -38,7 +38,7 @@ def get_year_for_month(month_name):
 
 initial_students = ['ACHMAD FAIRUZ', 'ADARA DWI NOVITA', 'ADELAMULIA PUTRI FAJARINO', 'AHMAD DENIS RUBIANSYAH']
 
-# --- 1. KONEKSI GOOGLE SHEETS ---
+# --- 1. KONEKSI GOOGLE SHEETS (DENGAN CACHE PANJANG) ---
 @st.cache_resource
 def get_gspread_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -52,9 +52,9 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Google Sheets: {e}")
     st.stop()
 
-# --- 2. MANAGEMENT DATABASE MASTER NAMA (CACHED) ---
-@st.cache_data(ttl=15)
-def get_all_master_df():
+# --- 2. MANAGEMENT DATABASE MASTER NAMA (TTL = 30 MENIT) ---
+@st.cache_data(ttl=1800)
+def fetch_all_master_df():
     try:
         ws = sh.worksheet("MASTER_SISWA")
         data = ws.get_all_values()
@@ -82,28 +82,26 @@ def get_all_master_df():
             return df
 
 def get_master_students(kelas):
-    df = get_all_master_df()
+    df = fetch_all_master_df()
     if kelas in df.columns:
         names = df[kelas].astype(str).str.strip().tolist()
-        names = [n for n in names if n != "" and n != "None" and n != "nan"]
-        return names
+        return [n for n in names if n not in ["", "None", "nan"]]
     return []
 
 def save_master_students(kelas, name_list):
-    df = get_all_master_df()
+    df = fetch_all_master_df()
     name_list = [str(n).strip() for n in name_list if str(n).strip() != ""]
-    
     df[kelas] = pd.Series(name_list)
     df = df.fillna("")
     
     ws = sh.worksheet("MASTER_SISWA")
     ws.clear()
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
-    st.cache_data.clear()
+    fetch_all_master_df.clear()
 
-# --- 3. MANAGEMENT PASSWORD DATABASE (CONFIG) ---
-@st.cache_data(ttl=60)
-def get_config_passwords():
+# --- 3. MANAGEMENT PASSWORD DATABASE (TTL = 30 MENIT) ---
+@st.cache_data(ttl=1800)
+def fetch_config_passwords():
     try:
         ws = sh.worksheet("CONFIG")
         data = ws.get_all_records()
@@ -127,11 +125,11 @@ def save_config_passwords(password_dict):
     ws.clear()
     df = pd.DataFrame(list(password_dict.items()), columns=['Key', 'Password'])
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
-    st.cache_data.clear()
+    fetch_config_passwords.clear()
 
-# --- 4. MANAGEMENT DATA ABSENSI BULANAN (CACHED) ---
-@st.cache_data(ttl=15)
-def get_attendance_data(kelas, month):
+# --- 4. MANAGEMENT DATA ABSENSI BULANAN (FECH DARI GOOGLE / SESSION) ---
+@st.cache_data(ttl=600)
+def fetch_attendance_data_from_gsheets(kelas, month):
     sheet_name = f"{kelas}_{month}"
     year = get_year_for_month(month)
     month_num = month_map[month]
@@ -185,7 +183,7 @@ def save_attendance_data(kelas, month, df):
     df = df.astype(str)
     data_to_write = [df.columns.values.tolist()] + df.values.tolist()
     ws.update(range_name='A1', values=data_to_write)
-    st.cache_data.clear()
+    fetch_attendance_data_from_gsheets.clear()
 
 # --- 5. PERHITUNGAN REKAP ABSENSI BULANAN & TAHUNAN ---
 def generate_full_report(df):
@@ -235,13 +233,12 @@ def generate_full_report(df):
     df_report['%'] = pct_list
     return df_report
 
-@st.cache_data(ttl=15)
-def get_yearly_recap(kelas):
+def calculate_yearly_recap(kelas):
     master_names = get_master_students(kelas)
     recap = {name: {'S': 0, 'I': 0, 'A': 0, 'Hadir': 0} for name in master_names}
     
     for m in months:
-        df_m = get_attendance_data(kelas, m)
+        df_m = fetch_attendance_data_from_gsheets(kelas, m)
         rep_m = generate_full_report(df_m)
         for _, row in rep_m.iterrows():
             nama = str(row['Nama Siswa']).strip()
@@ -272,7 +269,7 @@ def get_yearly_recap(kelas):
     return pd.DataFrame(rows)
 
 # --- 6. SISTEM OTENTIKASI & LOGIN ---
-passwords = get_config_passwords()
+passwords = fetch_config_passwords()
 
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
@@ -368,7 +365,12 @@ else:
             selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
             col_config, disabled_cols = get_calendar_config(selected_month)
             
-            current_data = get_attendance_data(my_class, selected_month)
+            # SIMPAN DATA KE SESSION STATE UNTUK MENCEGAH PANGGILAN API BERULANG DI HP
+            session_key = f"df_{my_class}_{selected_month}"
+            if session_key not in st.session_state:
+                st.session_state[session_key] = fetch_attendance_data_from_gsheets(my_class, selected_month)
+            
+            current_data = st.session_state[session_key]
             
             st.subheader("📝 Papan Lembar Absensi")
             st.caption("Catatan: Kolom Nama Siswa & Hari Libur dikunci otomatis demi keselarasan data.")
@@ -379,8 +381,11 @@ else:
                 use_container_width=True,
                 column_config=col_config,
                 disabled=["Nama Siswa"] + disabled_cols,
-                key=f"crud_{my_class}_{selected_month}"
+                key=f"editor_{session_key}"
             )
+            
+            # Perbarui session state lokal secara otomatis
+            st.session_state[session_key] = edited_df
             
             if st.button("💾 Simpan Absensi Bulan Ini", type="primary"):
                 with st.spinner("Mengunci absensi ke cloud..."):
@@ -395,9 +400,16 @@ else:
 
         with tab_rekap:
             st.subheader(f"📊 Rekapitulasi Kehadiran Akumulasi Seluruh Bulan (Kelas {my_class})")
-            st.info("💡 Data di bawah mencakup gabungan seluruh bulan (Juli s.d. Juni) secara real-time.")
-            yearly_df = get_yearly_recap(my_class)
-            st.dataframe(yearly_df, use_container_width=True, hide_index=True)
+            st.info("💡 Klik tombol di bawah untuk mengalkulasi akumulasi absensi 12 bulan dari cloud.")
+            
+            recap_key = f"yearly_recap_{my_class}"
+            if st.button("🔄 Muat / Perbarui Rekap 1 Tahun", type="primary"):
+                with st.spinner("Menghitung akumulasi 12 bulan..."):
+                    st.session_state[recap_key] = calculate_yearly_recap(my_class)
+                st.success("🎉 Data rekapitulasi 1 tahun berhasil diperbarui!")
+                
+            if recap_key in st.session_state:
+                st.dataframe(st.session_state[recap_key], use_container_width=True, hide_index=True)
 
         with tab_nama:
             st.subheader(f"👥 Pusat Pengaturan Siswa Kelas {my_class}")
@@ -417,6 +429,11 @@ else:
                 with st.spinner("Sinkronisasi database induk..."):
                     new_names_list = edited_masters["Nama Siswa"].dropna().tolist()
                     save_master_students(my_class, new_names_list)
+                    # Hapus cache session lokal agar mengambil nama baru
+                    for m in months:
+                        k = f"df_{my_class}_{m}"
+                        if k in st.session_state:
+                            del st.session_state[k]
                 st.success("🎉 Berhasil! Nama siswa diselaraskan mutlak di seluruh kalender bulan.")
                 st.rerun()
 
@@ -434,7 +451,7 @@ else:
                 piket_month = st.selectbox("📅 Pilih Bulan:", months, key="piket_m_m")
                 
             col_config, _ = get_calendar_config(piket_month)
-            raw_data = get_attendance_data(piket_class, piket_month)
+            raw_data = fetch_attendance_data_from_gsheets(piket_class, piket_month)
             calculated_data = generate_full_report(raw_data)
             
             st.write("---")
@@ -444,8 +461,14 @@ else:
         with tab_piket_tahunan:
             piket_class_year = st.selectbox("🏫 Pilih Kelas untuk Rekapitulasi Tahunan:", classes, key="piket_c_y")
             st.subheader(f"📊 Rekapitulasi Total Kehadiran Kelas {piket_class_year} (12 Bulan)")
-            yearly_piket_df = get_yearly_recap(piket_class_year)
-            st.dataframe(yearly_piket_df, use_container_width=True, hide_index=True)
+            
+            piket_recap_key = f"piket_recap_{piket_class_year}"
+            if st.button("🔄 Hitung Rekapitulasi Kelas Ini", type="primary"):
+                with st.spinner("Memuat data 12 bulan..."):
+                    st.session_state[piket_recap_key] = calculate_yearly_recap(piket_class_year)
+                    
+            if piket_recap_key in st.session_state:
+                st.dataframe(st.session_state[piket_recap_key], use_container_width=True, hide_index=True)
 
     # C. DASHBOARD HALAMAN ADMIN
     elif st.session_state.user_role == "Admin":
@@ -469,7 +492,7 @@ else:
                 
         with tab_master_all:
             st.subheader("📊 Database Induk Nama Siswa Seluruh Kelas")
-            df_all_masters = get_all_master_df()
+            df_all_masters = fetch_all_master_df()
             
             edited_all_masters = st.data_editor(
                 df_all_masters,
@@ -483,6 +506,6 @@ else:
                     ws = sh.worksheet("MASTER_SISWA")
                     ws.clear()
                     ws.update(range_name='A1', values=[df_cleaned.columns.values.tolist()] + df_cleaned.values.tolist())
-                    st.cache_data.clear()
+                    fetch_all_master_df.clear()
                 st.success("🔒 Database pusat 18 kelas sekolah berhasil dikunci!")
                 st.rerun()
