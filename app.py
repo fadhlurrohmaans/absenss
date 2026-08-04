@@ -9,16 +9,18 @@ import calendar
 # Konfigurasi Halaman Web
 st.set_page_config(layout="wide", page_title="Sistem Absensi Sekolah Digital")
 
-# Mengatur CSS Khusus agar Tampilan Tabel Lebih Nyaman Digeser di Layar HP
+# Mengatur CSS Khusus yang Ramah untuk WebKit Apple (Safari iOS/Mac)
 st.markdown("""
     <style>
-    div[data-testid="stDataFrame"] > div {
-        overflow-x: auto;
+    /* Dukungan Khusus WebKit / Safari Touch Scroll */
+    div[data-testid="stDataFrame"] {
+        -webkit-overflow-scrolling: touch;
     }
     .stButton>button {
         width: 100%;
         margin-top: 8px;
         margin-bottom: 8px;
+        border-radius: 8px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -38,7 +40,7 @@ def get_year_for_month(month_name):
 
 initial_students = ['ACHMAD FAIRUZ', 'ADARA DWI NOVITA', 'ADELAMULIA PUTRI FAJARINO', 'AHMAD DENIS RUBIANSYAH']
 
-# --- 1. KONEKSI GOOGLE SHEETS (DENGAN CACHE PANJANG) ---
+# --- 1. KONEKSI GOOGLE SHEETS ---
 @st.cache_resource
 def get_gspread_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -52,7 +54,7 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Google Sheets: {e}")
     st.stop()
 
-# --- 2. MANAGEMENT DATABASE MASTER NAMA (TTL = 30 MENIT) ---
+# --- 2. MANAGEMENT DATABASE MASTER NAMA ---
 @st.cache_data(ttl=1800)
 def fetch_all_master_df():
     try:
@@ -99,7 +101,7 @@ def save_master_students(kelas, name_list):
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_all_master_df.clear()
 
-# --- 3. MANAGEMENT PASSWORD DATABASE (TTL = 30 MENIT) ---
+# --- 3. MANAGEMENT PASSWORD DATABASE ---
 @st.cache_data(ttl=1800)
 def fetch_config_passwords():
     try:
@@ -127,7 +129,7 @@ def save_config_passwords(password_dict):
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_config_passwords.clear()
 
-# --- 4. MANAGEMENT DATA ABSENSI BULANAN (FECH DARI GOOGLE / SESSION) ---
+# --- 4. MANAGEMENT DATA ABSENSI BULANAN ---
 @st.cache_data(ttl=600)
 def fetch_attendance_data_from_gsheets(kelas, month):
     sheet_name = f"{kelas}_{month}"
@@ -190,7 +192,6 @@ def generate_full_report(df):
     df_report = df.copy()
     df_report[date_cols] = df_report[date_cols].fillna('')
     
-    # Deteksi Tanggal Efektif yang Sudah Mulai Diisi Absensinya
     active_date_cols = []
     for col in date_cols:
         vals = [str(v).strip().upper() for v in df_report[col].values]
@@ -365,7 +366,6 @@ else:
             selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
             col_config, disabled_cols = get_calendar_config(selected_month)
             
-            # SIMPAN DATA KE SESSION STATE UNTUK MENCEGAH PANGGILAN API BERULANG DI HP
             session_key = f"df_{my_class}_{selected_month}"
             if session_key not in st.session_state:
                 st.session_state[session_key] = fetch_attendance_data_from_gsheets(my_class, selected_month)
@@ -384,7 +384,6 @@ else:
                 key=f"editor_{session_key}"
             )
             
-            # Perbarui session state lokal secara otomatis
             st.session_state[session_key] = edited_df
             
             if st.button("💾 Simpan Absensi Bulan Ini", type="primary"):
@@ -429,7 +428,6 @@ else:
                 with st.spinner("Sinkronisasi database induk..."):
                     new_names_list = edited_masters["Nama Siswa"].dropna().tolist()
                     save_master_students(my_class, new_names_list)
-                    # Hapus cache session lokal agar mengambil nama baru
                     for m in months:
                         k = f"df_{my_class}_{m}"
                         if k in st.session_state:
@@ -437,7 +435,7 @@ else:
                 st.success("🎉 Berhasil! Nama siswa diselaraskan mutlak di seluruh kalender bulan.")
                 st.rerun()
 
-    # B. DASHBOARD HALAMAN GURU PIKET (READ-ONLY)
+    # B. DASHBOARD HALAMAN GURU PIKET
     elif st.session_state.user_role == "Guru Piket":
         st.title("🕵️‍♂️ Dashboard Peninjauan Guru Piket")
         
