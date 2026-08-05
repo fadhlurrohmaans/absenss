@@ -184,7 +184,7 @@ def save_config_passwords(password_dict):
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_config_passwords.clear()
 
-# --- 4. MANAGEMENT DATA ABSENSI BULANAN (TERMASUK OTOMATIS LIBUR NASIONAL) ---
+# --- 4. MANAGEMENT DATA ABSENSI BULANAN ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_attendance_data_from_gsheets(kelas, month):
     sheet_name = f"{kelas}_{month}"
@@ -406,6 +406,7 @@ if not st.session_state.logged_in:
 
 # --- LOGIKA DATA TAMPILAN JIKA SUDAH BERHASIL LOGIN ---
 else:
+    # Fungsi Pengatur Konfigurasi Kalender & Pencatat Indeks Libur
     def get_calendar_config(selected_month):
         year = get_year_for_month(selected_month)
         month_num = month_map[selected_month]
@@ -414,6 +415,7 @@ else:
         
         disabled_cols = []
         col_config = {}
+        monthly_holidays = [] # Daftar penampung keterangan libur nasional bulan ini
         
         for i in range(1, 32):
             col_name = f"Tgl {i}"
@@ -428,13 +430,13 @@ else:
                 if is_off:
                     disabled_cols.append(col_name)
                     if reason != "Weekend":
-                        # Beri tanda merah (🔴) jika tanggal merah libur nasional
                         col_config[col_name] = st.column_config.TextColumn(label=f"{i} (🔴)")
+                        monthly_holidays.append((i, day_name, reason))
                     else:
                         col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
                 else:
                     col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
-        return col_config, disabled_cols
+        return col_config, disabled_cols, monthly_holidays
 
     # A. DASHBOARD HALAMAN GURU KELAS
     if st.session_state.user_role == "Guru Kelas":
@@ -449,7 +451,14 @@ else:
         
         with tab_absen:
             selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
-            col_config, disabled_cols = get_calendar_config(selected_month)
+            col_config, disabled_cols, monthly_holidays = get_calendar_config(selected_month)
+            
+            # --- TAMPILKAN INDEKS / KETERANGAN LIBUR NASIONAL ---
+            if monthly_holidays:
+                holiday_items = "\n".join([f"• **Tanggal {day} ({day_name})**: {reason}" for day, day_name, reason in monthly_holidays])
+                st.info(f"🔴 **Keterangan Hari Libur Nasional ({selected_month}):**\n\n{holiday_items}")
+            else:
+                st.caption(f"ℹ️ Bulan {selected_month} tidak memiliki Tanggal Merah Hari Libur Nasional.")
             
             session_key = f"df_{my_class}_{selected_month}"
             if session_key not in st.session_state:
@@ -536,7 +545,15 @@ else:
             with col_p2:
                 piket_month = st.selectbox("📅 Pilih Bulan:", months, key="piket_m_m")
                 
-            col_config, _ = get_calendar_config(piket_month)
+            col_config, _, monthly_holidays = get_calendar_config(piket_month)
+            
+            # --- TAMPILKAN INDEKS / KETERANGAN LIBUR NASIONAL DI HALAMAN PIKET ---
+            if monthly_holidays:
+                holiday_items = "\n".join([f"• **Tanggal {day} ({day_name})**: {reason}" for day, day_name, reason in monthly_holidays])
+                st.info(f"🔴 **Keterangan Hari Libur Nasional ({piket_month}):**\n\n{holiday_items}")
+            else:
+                st.caption(f"ℹ️ Bulan {piket_month} tidak memiliki Tanggal Merah Hari Libur Nasional.")
+                
             raw_data = fetch_attendance_data_from_gsheets(piket_class, piket_month)
             calculated_data = generate_full_report(raw_data)
             
