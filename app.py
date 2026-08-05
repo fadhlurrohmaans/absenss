@@ -6,13 +6,68 @@ from gspread.exceptions import WorksheetNotFound, APIError
 import datetime
 import calendar
 
+# Coba muat library holidays untuk kalender Indonesia
+try:
+    import holidays
+    id_holidays = holidays.ID(years=[2026, 2027])
+except ImportError:
+    id_holidays = {}
+
+# Daftar Libur Nasional Indonesia (Fallback jika library 'holidays' belum terinstal)
+manual_holidays = {
+    # 2026
+    datetime.date(2026, 1, 1): "Tahun Baru Masehi",
+    datetime.date(2026, 1, 16): "Isra Mikraj",
+    datetime.date(2026, 2, 17): "Tahun Baru Imlek",
+    datetime.date(2026, 3, 19): "Hari Suci Nyepi",
+    datetime.date(2026, 3, 20): "Hari Raya Idul Fitri",
+    datetime.date(2026, 3, 21): "Hari Raya Idul Fitri",
+    datetime.date(2026, 4, 3): "Wafat Yesus Kristus",
+    datetime.date(2026, 4, 5): "Hari Paskah",
+    datetime.date(2026, 5, 1): "Hari Buruh Internasional",
+    datetime.date(2026, 5, 14): "Kenaikan Yesus Kristus",
+    datetime.date(2026, 5, 27): "Hari Raya Idul Adha",
+    datetime.date(2026, 5, 31): "Hari Raya Waisak",
+    datetime.date(2026, 6, 1): "Hari Lahir Pancasila",
+    datetime.date(2026, 6, 16): "Tahun Baru Islam",
+    datetime.date(2026, 8, 17): "Proklamasi Kemerdekaan RI",
+    datetime.date(2026, 8, 25): "Maulid Nabi Muhammad SAW",
+    datetime.date(2026, 12, 25): "Hari Raya Natal",
+    # 2027
+    datetime.date(2027, 1, 1): "Tahun Baru Masehi",
+    datetime.date(2027, 2, 6): "Tahun Baru Imlek",
+    datetime.date(2027, 3, 9): "Hari Raya Idul Fitri",
+    datetime.date(2027, 3, 10): "Hari Raya Idul Fitri",
+    datetime.date(2027, 3, 26): "Wafat Yesus Kristus",
+    datetime.date(2027, 5, 1): "Hari Buruh Internasional",
+    datetime.date(2027, 5, 6): "Kenaikan Yesus Kristus",
+    datetime.date(2027, 5, 17): "Hari Raya Idul Adha",
+    datetime.date(2027, 5, 20): "Hari Raya Waisak",
+    datetime.date(2027, 6, 1): "Hari Lahir Pancasila",
+    datetime.date(2027, 6, 6): "Tahun Baru Islam",
+    datetime.date(2027, 8, 15): "Maulid Nabi Muhammad SAW",
+    datetime.date(2027, 8, 17): "Proklamasi Kemerdekaan RI",
+    datetime.date(2027, 12, 25): "Hari Raya Natal",
+}
+
+# Fungsi Pembantu Cek Hari Libur / Weekend
+def is_day_off(dt):
+    # Cek Weekend (Sabtu=5, Minggu=6)
+    if dt.weekday() in [5, 6]:
+        return True, "Weekend"
+    # Cek Libur Nasional (Library / Manual)
+    if dt in id_holidays:
+        return True, str(id_holidays.get(dt))
+    if dt in manual_holidays:
+        return True, manual_holidays[dt]
+    return False, ""
+
 # Konfigurasi Halaman Web
 st.set_page_config(layout="wide", page_title="Sistem Absensi Sekolah Digital")
 
-# Mengatur CSS Khusus yang Ramah untuk Android & WebKit Apple
+# Mengatur CSS Khusus
 st.markdown("""
     <style>
-    /* Dukungan Khusus Android/Touch Scroll */
     div[data-testid="stDataFrame"] {
         -webkit-overflow-scrolling: touch;
     }
@@ -40,7 +95,7 @@ def get_year_for_month(month_name):
 
 initial_students = ['ACHMAD FAIRUZ', 'ADARA DWI NOVITA', 'ADELAMULIA PUTRI FAJARINO', 'AHMAD DENIS RUBIANSYAH']
 
-# --- 1. KONEKSI GOOGLE SHEETS (DENGAN CACHING TEROPTIMASI) ---
+# --- 1. KONEKSI GOOGLE SHEETS ---
 @st.cache_resource(show_spinner=False)
 def get_gspread_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -129,7 +184,7 @@ def save_config_passwords(password_dict):
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_config_passwords.clear()
 
-# --- 4. MANAGEMENT DATA ABSENSI BULANAN ---
+# --- 4. MANAGEMENT DATA ABSENSI BULANAN (TERMASUK OTOMATIS LIBUR NASIONAL) ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_attendance_data_from_gsheets(kelas, month):
     sheet_name = f"{kelas}_{month}"
@@ -157,18 +212,18 @@ def fetch_attendance_data_from_gsheets(kelas, month):
             df_new[col] = '-'
         else:
             dt = datetime.date(year, month_num, i)
-            is_weekend = dt.weekday() in [5, 6]
+            is_off, _ = is_day_off(dt)
             
             col_values = []
             for idx in range(len(master_names)):
                 if idx < len(df_stored) and col in df_stored.columns:
                     val = str(df_stored.loc[idx, col]).strip()
                     if val in ['', 'None', 'nan', 'L', '-']:
-                        col_values.append('L' if is_weekend else '')
+                        col_values.append('L' if is_off else '')
                     else:
                         col_values.append(val)
                 else:
-                    col_values.append('L' if is_weekend else '')
+                    col_values.append('L' if is_off else '')
             df_new[col] = col_values
             
     return df_new
@@ -187,7 +242,7 @@ def save_attendance_data(kelas, month, df):
     ws.update(range_name='A1', values=data_to_write)
     fetch_attendance_data_from_gsheets.clear()
 
-# --- 5. PERHITUNGAN REKAP ABSENSI BULANAN & TAHUNAN (DENGAN % HADIR, % IZIN, % ALPHA, % SAKIT) ---
+# --- 5. PERHITUNGAN REKAP ABSENSI BULANAN & TAHUNAN ---
 def generate_full_report(df):
     df_report = df.copy()
     df_report[date_cols] = df_report[date_cols].fillna('')
@@ -368,9 +423,17 @@ else:
             else:
                 dt = datetime.date(year, month_num, i)
                 day_name = days_id[dt.weekday()]
-                if dt.weekday() in [5, 6]:
+                is_off, reason = is_day_off(dt)
+                
+                if is_off:
                     disabled_cols.append(col_name)
-                col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
+                    if reason != "Weekend":
+                        # Beri tanda merah (🔴) jika tanggal merah libur nasional
+                        col_config[col_name] = st.column_config.TextColumn(label=f"{i} (🔴)")
+                    else:
+                        col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
+                else:
+                    col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
         return col_config, disabled_cols
 
     # A. DASHBOARD HALAMAN GURU KELAS
@@ -395,7 +458,7 @@ else:
             current_data = st.session_state[session_key]
             
             st.subheader("📝 Papan Lembar Absensi")
-            st.caption("Catatan: Kolom Nama Siswa & Hari Libur dikunci otomatis demi keselarasan data.")
+            st.caption("Catatan: Kolom Nama Siswa, Weekend, & Tanggal Merah (🔴) dikunci otomatis.")
             
             edited_df = st.data_editor(
                 current_data,
