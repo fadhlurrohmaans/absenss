@@ -9,10 +9,10 @@ import calendar
 # Konfigurasi Halaman Web
 st.set_page_config(layout="wide", page_title="Sistem Absensi Sekolah Digital")
 
-# Mengatur CSS Khusus yang Ramah untuk WebKit Apple (Safari iOS/Mac)
+# Mengatur CSS Khusus yang Ramah untuk Android & WebKit Apple
 st.markdown("""
     <style>
-    /* Dukungan Khusus WebKit / Safari Touch Scroll */
+    /* Dukungan Khusus Android/Touch Scroll */
     div[data-testid="stDataFrame"] {
         -webkit-overflow-scrolling: touch;
     }
@@ -40,8 +40,8 @@ def get_year_for_month(month_name):
 
 initial_students = ['ACHMAD FAIRUZ', 'ADARA DWI NOVITA', 'ADELAMULIA PUTRI FAJARINO', 'AHMAD DENIS RUBIANSYAH']
 
-# --- 1. KONEKSI GOOGLE SHEETS ---
-@st.cache_resource
+# --- 1. KONEKSI GOOGLE SHEETS (DENGAN CACHING TEROPTIMASI) ---
+@st.cache_resource(show_spinner=False)
 def get_gspread_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
@@ -55,7 +55,7 @@ except Exception as e:
     st.stop()
 
 # --- 2. MANAGEMENT DATABASE MASTER NAMA ---
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_all_master_df():
     try:
         ws = sh.worksheet("MASTER_SISWA")
@@ -102,7 +102,7 @@ def save_master_students(kelas, name_list):
     fetch_all_master_df.clear()
 
 # --- 3. MANAGEMENT PASSWORD DATABASE ---
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_config_passwords():
     try:
         ws = sh.worksheet("CONFIG")
@@ -130,7 +130,7 @@ def save_config_passwords(password_dict):
     fetch_config_passwords.clear()
 
 # --- 4. MANAGEMENT DATA ABSENSI BULANAN ---
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=1800, show_spinner=False)
 def fetch_attendance_data_from_gsheets(kelas, month):
     sheet_name = f"{kelas}_{month}"
     year = get_year_for_month(month)
@@ -187,7 +187,7 @@ def save_attendance_data(kelas, month, df):
     ws.update(range_name='A1', values=data_to_write)
     fetch_attendance_data_from_gsheets.clear()
 
-# --- 5. PERHITUNGAN REKAP ABSENSI BULANAN & TAHUNAN ---
+# --- 5. PERHITUNGAN REKAP ABSENSI BULANAN & TAHUNAN (DENGAN % HADIR, % IZIN, % ALPHA, % SAKIT) ---
 def generate_full_report(df):
     df_report = df.copy()
     df_report[date_cols] = df_report[date_cols].fillna('')
@@ -199,17 +199,20 @@ def generate_full_report(df):
         if has_entry:
             active_date_cols.append(col)
             
-    s_list, i_list, a_list, h_list, pct_list = [], [], [], [], []
+    s_list, i_list, a_list, h_list = [], [], [], []
+    pct_h_list, pct_i_list, pct_a_list, pct_s_list = [], [], [], []
     
     for _, row in df_report.iterrows():
         nama = str(row['Nama Siswa']).strip()
         if pd.isna(row['Nama Siswa']) or nama in ["", "(Siswa Belum Diisi di Tab Kelola)"]:
-            s_list.append(0); i_list.append(0); a_list.append(0); h_list.append(0); pct_list.append("0%")
+            s_list.append(0); i_list.append(0); a_list.append(0); h_list.append(0)
+            pct_h_list.append("0%"); pct_i_list.append("0%"); pct_a_list.append("0%"); pct_s_list.append("0%")
             continue
             
         s, i, a, h = 0, 0, 0, 0
         if not active_date_cols:
-            s_list.append(0); i_list.append(0); a_list.append(0); h_list.append(0); pct_list.append("0%")
+            s_list.append(0); i_list.append(0); a_list.append(0); h_list.append(0)
+            pct_h_list.append("0%"); pct_i_list.append("0%"); pct_a_list.append("0%"); pct_s_list.append("0%")
             continue
             
         for col in active_date_cols:
@@ -224,14 +227,25 @@ def generate_full_report(df):
                 h += 1
                 
         total = s + i + a + h
-        pct = (h / total * 100) if total > 0 else 0.0
-        s_list.append(s); i_list.append(i); a_list.append(a); h_list.append(h); pct_list.append(f"{pct:.0f}%")
+        pct_h = (h / total * 100) if total > 0 else 0.0
+        pct_i = (i / total * 100) if total > 0 else 0.0
+        pct_a = (a / total * 100) if total > 0 else 0.0
+        pct_s = (s / total * 100) if total > 0 else 0.0
+
+        s_list.append(s); i_list.append(i); a_list.append(a); h_list.append(h)
+        pct_h_list.append(f"{pct_h:.1f}%")
+        pct_i_list.append(f"{pct_i:.1f}%")
+        pct_a_list.append(f"{pct_a:.1f}%")
+        pct_s_list.append(f"{pct_s:.1f}%")
         
     df_report['S'] = s_list
     df_report['I'] = i_list
     df_report['A'] = a_list
     df_report['Hadir'] = h_list
-    df_report['%'] = pct_list
+    df_report['% Hadir'] = pct_h_list
+    df_report['% Izin'] = pct_i_list
+    df_report['% Alpha'] = pct_a_list
+    df_report['% Sakit'] = pct_s_list
     return df_report
 
 def calculate_yearly_recap(kelas):
@@ -256,7 +270,12 @@ def calculate_yearly_recap(kelas):
         a = recap[nama]['A']
         h = recap[nama]['Hadir']
         tot = s + i + a + h
-        pct = (h / tot * 100) if tot > 0 else 0.0
+        
+        pct_h = (h / tot * 100) if tot > 0 else 0.0
+        pct_i = (i / tot * 100) if tot > 0 else 0.0
+        pct_a = (a / tot * 100) if tot > 0 else 0.0
+        pct_s = (s / tot * 100) if tot > 0 else 0.0
+        
         rows.append({
             'No': idx,
             'Nama Siswa': nama,
@@ -265,7 +284,10 @@ def calculate_yearly_recap(kelas):
             'Alpha (A)': a,
             'Total Hadir (H)': h,
             'Total Hari Efektif': tot,
-            '% Kehadiran': f"{pct:.0f}%"
+            '% Hadir': f"{pct_h:.1f}%",
+            '% Izin': f"{pct_i:.1f}%",
+            '% Alpha': f"{pct_a:.1f}%",
+            '% Sakit': f"{pct_s:.1f}%"
         })
     return pd.DataFrame(rows)
 
@@ -395,7 +417,10 @@ else:
             st.write("---")
             st.subheader("📋 Ringkasan Kehadiran Bulan Ini")
             full_report = generate_full_report(edited_df)
-            st.dataframe(full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '%']], use_container_width=True)
+            st.dataframe(
+                full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '% Hadir', '% Izin', '% Alpha', '% Sakit']], 
+                use_container_width=True
+            )
 
         with tab_rekap:
             st.subheader(f"📊 Rekapitulasi Kehadiran Akumulasi Seluruh Bulan (Kelas {my_class})")
