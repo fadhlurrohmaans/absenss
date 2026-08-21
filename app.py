@@ -5,6 +5,7 @@ from google.oauth2.service_account import Credentials
 from gspread.exceptions import WorksheetNotFound, APIError
 import datetime
 import calendar
+import io
 
 # Coba muat library holidays untuk kalender Indonesia
 try:
@@ -511,6 +512,66 @@ else:
             st.subheader(f"👥 Pusat Pengaturan Siswa Kelas {my_class}")
             st.info("Menambah, menghapus, atau mengganti ejaan nama di sini akan otomatis merubah seluruh lembar 12 bulan absensi kelas Anda.")
             
+            # --- 📥 UPGRADE: FITUR EXPORT & IMPORT DATA MASTER KELAS ---
+            with st.expander("📥 📤 Fitur Export / Import Data Master Siswa (CSV / Excel)", expanded=False):
+                col_exp, col_imp = st.columns(2)
+                
+                # 1. EXPORT
+                with col_exp:
+                    st.markdown("##### 📥 Export Master Siswa")
+                    st.caption("Unduh daftar siswa kelas ini ke file CSV.")
+                    current_masters_list = get_master_students(my_class)
+                    df_export = pd.DataFrame(current_masters_list, columns=["Nama Siswa"])
+                    csv_bytes = df_export.to_csv(index=False).encode('utf-8')
+                    
+                    st.download_button(
+                        label=f"⬇️ Download CSV Master Kelas {my_class}",
+                        data=csv_bytes,
+                        file_name=f"Master_Siswa_Kelas_{my_class}.csv",
+                        mime="text/csv",
+                        key=f"dl_csv_{my_class}"
+                    )
+                
+                # 2. IMPORT
+                with col_imp:
+                    st.markdown("##### 📤 Import Master Siswa")
+                    st.caption("Unggah file CSV atau Excel (.xlsx) untuk mengganti data master.")
+                    uploaded_file = st.file_uploader(
+                        f"Pilih file CSV/Excel untuk Kelas {my_class}:",
+                        type=["csv", "xlsx"],
+                        key=f"uploader_{my_class}"
+                    )
+                    
+                    if uploaded_file is not None:
+                        try:
+                            if uploaded_file.name.endswith(".csv"):
+                                df_imp = pd.read_csv(uploaded_file)
+                            else:
+                                df_imp = pd.read_excel(uploaded_file)
+                            
+                            # Deteksi kolom nama
+                            if "Nama Siswa" in df_imp.columns:
+                                imp_names = df_imp["Nama Siswa"].dropna().astype(str).str.strip().tolist()
+                            else:
+                                imp_names = df_imp.iloc[:, 0].dropna().astype(str).str.strip().tolist()
+                            
+                            imp_names = [n for n in imp_names if n not in ["", "nan", "None"]]
+                            st.success(f"Ditemukan {len(imp_names)} siswa dari file yang diupload.")
+                            
+                            if st.button("💾 Terapkan Data Import Ini", type="primary", key=f"btn_apply_imp_{my_class}"):
+                                with st.spinner("Menyimpan data hasil import..."):
+                                    save_master_students(my_class, imp_names)
+                                    for m in months:
+                                        k = f"df_{my_class}_{m}"
+                                        if k in st.session_state:
+                                            del st.session_state[k]
+                                st.success("🎉 Data master berhasil diperbarui dari file import!")
+                                st.rerun()
+                        except Exception as ex_err:
+                            st.error(f"❌ Gagal memproses file: {ex_err}")
+            
+            st.write("---")
+            st.markdown("##### ✏️ Edit Manual Daftar Siswa")
             current_masters = get_master_students(my_class)
             df_masters = pd.DataFrame(current_masters, columns=["Nama Siswa"])
             
@@ -597,6 +658,57 @@ else:
             st.subheader("📊 Database Induk Nama Siswa Seluruh Kelas")
             df_all_masters = fetch_all_master_df()
             
+            # --- 📥 UPGRADE: FITUR EXPORT & IMPORT PUSAT (ADMIN) ---
+            with st.expander("📥 📤 Export / Import Database Pusat Master Seluruh Sekolah (CSV / Excel)", expanded=False):
+                col_adm_exp, col_adm_imp = st.columns(2)
+                
+                # EXPORT PUSAT
+                with col_adm_exp:
+                    st.markdown("##### 📥 Export Master Seluruh Sekolah")
+                    st.caption("Unduh database master seluruh 18 kelas ke format CSV.")
+                    csv_all_bytes = df_all_masters.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="⬇️ Download CSV Master Seluruh Sekolah",
+                        data=csv_all_bytes,
+                        file_name="Master_Siswa_Seluruh_Sekolah.csv",
+                        mime="text/csv",
+                        key="dl_admin_all_csv"
+                    )
+                
+                # IMPORT PUSAT
+                with col_adm_imp:
+                    st.markdown("##### 📤 Import Master Seluruh Sekolah")
+                    st.caption("Unggah file CSV/Excel dengan header nama kelas (7A, 7B, ... 9F).")
+                    uploaded_all = st.file_uploader(
+                        "Pilih file CSV/Excel Seluruh Sekolah:",
+                        type=["csv", "xlsx"],
+                        key="uploader_admin_all"
+                    )
+                    
+                    if uploaded_all is not None:
+                        try:
+                            if uploaded_all.name.endswith(".csv"):
+                                df_imp_all = pd.read_csv(uploaded_all)
+                            else:
+                                df_imp_all = pd.read_excel(uploaded_all)
+                            
+                            st.write("👀 Preview File Import Pusat:")
+                            st.dataframe(df_imp_all.head(5), use_container_width=True)
+                            
+                            if st.button("💾 Terapkan & Timpa Database Pusat", type="primary", key="btn_apply_imp_all"):
+                                with st.spinner("Menyimpan ke cloud Google Sheets..."):
+                                    df_cleaned = df_imp_all.fillna("")
+                                    ws = sh.worksheet("MASTER_SISWA")
+                                    ws.clear()
+                                    ws.update(range_name='A1', values=[df_cleaned.columns.values.tolist()] + df_cleaned.values.tolist())
+                                    fetch_all_master_df.clear()
+                                st.success("🎉 Master siswa 18 kelas seluruh sekolah berhasil ditimpa dari file import!")
+                                st.rerun()
+                        except Exception as ex_admin_err:
+                            st.error(f"❌ Gagal memproses file import pusat: {ex_admin_err}")
+            
+            st.write("---")
+            st.markdown("##### ✏️ Edit Table Manual Seluruh Kelas")
             edited_all_masters = st.data_editor(
                 df_all_masters,
                 num_rows="dynamic",
