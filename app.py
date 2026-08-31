@@ -156,6 +156,7 @@ def save_master_students(kelas, name_list):
     ws.clear()
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_all_master_df.clear()
+    fetch_attendance_data_from_gsheets.clear()  # <-- PERBAIKAN: Clear cache absensi bulanan
 
 # --- 3. MANAGEMENT PASSWORD DATABASE ---
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -360,7 +361,8 @@ if 'assigned_class' not in st.session_state:
 st.sidebar.title("🏢 Menu Utama Sekolah")
 
 if st.session_state.logged_in:
-    st.sidebar.success(f"Masuk sebagai:\n{st.session_state.user_role} " + (f"({st.session_state.assigned_class})" if st.session_state.assigned_class else ""))
+    role_text = f"Masuk sebagai:\n{st.session_state.user_role} " + (f"({st.session_state.assigned_class})" if st.session_state.assigned_class else "")
+    st.sidebar.success(role_text)
     if st.sidebar.button("🚪 Keluar / Logout"):
         st.session_state.logged_in = False
         st.session_state.user_role = None
@@ -561,10 +563,13 @@ else:
                             if st.button("💾 Terapkan Data Import Ini", type="primary", key=f"btn_apply_imp_{my_class}"):
                                 with st.spinner("Menyimpan data hasil import..."):
                                     save_master_students(my_class, imp_names)
+                                    # Clear cache session state untuk seluruh bulan & rekap kelas ini
                                     for m in months:
                                         k = f"df_{my_class}_{m}"
                                         if k in st.session_state:
                                             del st.session_state[k]
+                                    if f"yearly_recap_{my_class}" in st.session_state:
+                                        del st.session_state[f"yearly_recap_{my_class}"]
                                 st.success("🎉 Data master berhasil diperbarui dari file import!")
                                 st.rerun()
                         except Exception as ex_err:
@@ -586,10 +591,13 @@ else:
                 with st.spinner("Sinkronisasi database induk..."):
                     new_names_list = edited_masters["Nama Siswa"].dropna().tolist()
                     save_master_students(my_class, new_names_list)
+                    # Clear cache session state untuk seluruh bulan & rekap kelas ini
                     for m in months:
                         k = f"df_{my_class}_{m}"
                         if k in st.session_state:
                             del st.session_state[k]
+                    if f"yearly_recap_{my_class}" in st.session_state:
+                        del st.session_state[f"yearly_recap_{my_class}"]
                 st.success("🎉 Berhasil! Nama siswa diselaraskan mutlak di seluruh kalender bulan.")
                 st.rerun()
 
@@ -702,6 +710,10 @@ else:
                                     ws.clear()
                                     ws.update(range_name='A1', values=[df_cleaned.columns.values.tolist()] + df_cleaned.values.tolist())
                                     fetch_all_master_df.clear()
+                                    fetch_attendance_data_from_gsheets.clear()  # <-- PERBAIKAN: Clear cache
+                                    for k in list(st.session_state.keys()):
+                                        if k.startswith("df_") or k.startswith("yearly_recap_") or k.startswith("piket_recap_"):
+                                            del st.session_state[k]
                                 st.success("🎉 Master siswa 18 kelas seluruh sekolah berhasil ditimpa dari file import!")
                                 st.rerun()
                         except Exception as ex_admin_err:
@@ -722,5 +734,9 @@ else:
                     ws.clear()
                     ws.update(range_name='A1', values=[df_cleaned.columns.values.tolist()] + df_cleaned.values.tolist())
                     fetch_all_master_df.clear()
+                    fetch_attendance_data_from_gsheets.clear()  # <-- PERBAIKAN: Clear cache
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("df_") or k.startswith("yearly_recap_") or k.startswith("piket_recap_"):
+                            del st.session_state[k]
                 st.success("🔒 Database pusat 18 kelas sekolah berhasil dikunci!")
                 st.rerun()
