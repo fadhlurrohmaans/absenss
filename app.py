@@ -84,6 +84,9 @@ st.markdown("""
 # Parameter Utama Aplikasi
 classes = [f"{grade}{letter}" for grade in [7, 8, 9] for letter in ['A', 'B', 'C', 'D', 'E', 'F']]
 months = ['JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER', 'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI']
+ganjil_months = ['JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER']
+genap_months = ['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI']
+
 date_cols = [f"Tgl {i}" for i in range(1, 32)]
 
 month_map = {
@@ -156,7 +159,7 @@ def save_master_students(kelas, name_list):
     ws.clear()
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_all_master_df.clear()
-    fetch_attendance_data_from_gsheets.clear()  # <-- PERBAIKAN: Clear cache absensi bulanan
+    fetch_attendance_data_from_gsheets.clear()
 
 # --- 3. MANAGEMENT PASSWORD DATABASE ---
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -244,7 +247,7 @@ def save_attendance_data(kelas, month, df):
     ws.update(range_name='A1', values=data_to_write)
     fetch_attendance_data_from_gsheets.clear()
 
-# --- 5. PERHITUNGAN REKAP ABSENSI BULANAN & TAHUNAN ---
+# --- 5. PERHITUNGAN REKAP ABSENSI BULANAN, SEMESTER & TAHUNAN ---
 def generate_full_report(df):
     df_report = df.copy()
     df_report[date_cols] = df_report[date_cols].fillna('')
@@ -305,11 +308,12 @@ def generate_full_report(df):
     df_report['% Sakit'] = pct_s_list
     return df_report
 
-def calculate_yearly_recap(kelas):
+def calculate_period_recap(kelas, target_months):
+    """Menghitung rekapitulasi untuk periode bulan tertentu (Semester atau 1 Tahun)."""
     master_names = get_master_students(kelas)
     recap = {name: {'S': 0, 'I': 0, 'A': 0, 'Hadir': 0} for name in master_names}
     
-    for m in months:
+    for m in target_months:
         df_m = fetch_attendance_data_from_gsheets(kelas, m)
         rep_m = generate_full_report(df_m)
         for _, row in rep_m.iterrows():
@@ -347,6 +351,15 @@ def calculate_yearly_recap(kelas):
             '% Sakit': f"{pct_s:.1f}%"
         })
     return pd.DataFrame(rows)
+
+def calculate_yearly_recap(kelas):
+    return calculate_period_recap(kelas, months)
+
+def calculate_ganjil_recap(kelas):
+    return calculate_period_recap(kelas, ganjil_months)
+
+def calculate_genap_recap(kelas):
+    return calculate_period_recap(kelas, genap_months)
 
 # --- 6. SISTEM OTENTIKASI & LOGIN ---
 passwords = fetch_config_passwords()
@@ -446,8 +459,10 @@ else:
         my_class = st.session_state.assigned_class
         st.title(f"🏫 Ruang Kerja Kelas {my_class}")
         
-        tab_absen, tab_rekap, tab_nama = st.tabs([
+        tab_absen, tab_ganjil, tab_genap, tab_rekap, tab_nama = st.tabs([
             "📝 Isi Absensi Bulanan", 
+            "🍂 Rekap Semester Ganjil",
+            "🌸 Rekap Semester Genap",
             "📊 Rekap Seluruh Bulan (1 Tahun)", 
             "👥 Kelola Daftar Master Siswa"
         ])
@@ -496,6 +511,32 @@ else:
                 full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '% Hadir', '% Izin', '% Alpha', '% Sakit']], 
                 use_container_width=True
             )
+
+        with tab_ganjil:
+            st.subheader(f"🍂 Rekapitulasi Semester Ganjil (Juli - Desember) - Kelas {my_class}")
+            st.info("💡 Klik tombol di bawah untuk mengalkulasi akumulasi absensi Semester Ganjil dari cloud.")
+            
+            ganjil_key = f"ganjil_recap_{my_class}"
+            if st.button("🔄 Muat / Perbarui Rekap Semester Ganjil", type="primary", key="btn_ganjil_gk"):
+                with st.spinner("Menghitung akumulasi Semester Ganjil (6 bulan)..."):
+                    st.session_state[ganjil_key] = calculate_ganjil_recap(my_class)
+                st.success("🎉 Data rekapitulasi Semester Ganjil berhasil diperbarui!")
+                
+            if ganjil_key in st.session_state:
+                st.dataframe(st.session_state[ganjil_key], use_container_width=True, hide_index=True)
+
+        with tab_genap:
+            st.subheader(f"🌸 Rekapitulasi Semester Genap (Januari - Juni) - Kelas {my_class}")
+            st.info("💡 Klik tombol di bawah untuk mengalkulasi akumulasi absensi Semester Genap dari cloud.")
+            
+            genap_key = f"genap_recap_{my_class}"
+            if st.button("🔄 Muat / Perbarui Rekap Semester Genap", type="primary", key="btn_genap_gk"):
+                with st.spinner("Menghitung akumulasi Semester Genap (6 bulan)..."):
+                    st.session_state[genap_key] = calculate_genap_recap(my_class)
+                st.success("🎉 Data rekapitulasi Semester Genap berhasil diperbarui!")
+                
+            if genap_key in st.session_state:
+                st.dataframe(st.session_state[genap_key], use_container_width=True, hide_index=True)
 
         with tab_rekap:
             st.subheader(f"📊 Rekapitulasi Kehadiran Akumulasi Seluruh Bulan (Kelas {my_class})")
@@ -564,12 +605,9 @@ else:
                                 with st.spinner("Menyimpan data hasil import..."):
                                     save_master_students(my_class, imp_names)
                                     # Clear cache session state untuk seluruh bulan & rekap kelas ini
-                                    for m in months:
-                                        k = f"df_{my_class}_{m}"
-                                        if k in st.session_state:
-                                            del st.session_state[k]
-                                    if f"yearly_recap_{my_class}" in st.session_state:
-                                        del st.session_state[f"yearly_recap_{my_class}"]
+                                    for key_del in list(st.session_state.keys()):
+                                        if key_del.startswith(f"df_{my_class}_") or key_del in [f"yearly_recap_{my_class}", f"ganjil_recap_{my_class}", f"genap_recap_{my_class}"]:
+                                            del st.session_state[key_del]
                                 st.success("🎉 Data master berhasil diperbarui dari file import!")
                                 st.rerun()
                         except Exception as ex_err:
@@ -592,12 +630,9 @@ else:
                     new_names_list = edited_masters["Nama Siswa"].dropna().tolist()
                     save_master_students(my_class, new_names_list)
                     # Clear cache session state untuk seluruh bulan & rekap kelas ini
-                    for m in months:
-                        k = f"df_{my_class}_{m}"
-                        if k in st.session_state:
-                            del st.session_state[k]
-                    if f"yearly_recap_{my_class}" in st.session_state:
-                        del st.session_state[f"yearly_recap_{my_class}"]
+                    for key_del in list(st.session_state.keys()):
+                        if key_del.startswith(f"df_{my_class}_") or key_del in [f"yearly_recap_{my_class}", f"ganjil_recap_{my_class}", f"genap_recap_{my_class}"]:
+                            del st.session_state[key_del]
                 st.success("🎉 Berhasil! Nama siswa diselaraskan mutlak di seluruh kalender bulan.")
                 st.rerun()
 
@@ -605,7 +640,12 @@ else:
     elif st.session_state.user_role == "Guru Piket":
         st.title("🕵️‍♂️ Dashboard Peninjauan Guru Piket")
         
-        tab_piket_bulanan, tab_piket_tahunan = st.tabs(["📅 Laporan Bulanan", "📊 Rekap Akumulasi Seluruh Bulan"])
+        tab_piket_bulanan, tab_piket_ganjil, tab_piket_genap, tab_piket_tahunan = st.tabs([
+            "📅 Laporan Bulanan", 
+            "🍂 Rekap Semester Ganjil",
+            "🌸 Rekap Semester Genap",
+            "📊 Rekap Akumulasi Seluruh Bulan (1 Tahun)"
+        ])
         
         with tab_piket_bulanan:
             col_p1, col_p2 = st.columns(2)
@@ -630,12 +670,36 @@ else:
             st.subheader(f"📊 Laporan Real-Time Kehadiran Kelas {piket_class} ({piket_month})")
             st.dataframe(calculated_data, use_container_width=True, column_config=col_config)
 
+        with tab_piket_ganjil:
+            piket_class_ganjil = st.selectbox("🏫 Pilih Kelas untuk Rekap Semester Ganjil:", classes, key="piket_c_ganjil")
+            st.subheader(f"🍂 Rekapitulasi Kehadiran Semester Ganjil (Juli - Desember) Kelas {piket_class_ganjil}")
+            
+            piket_ganjil_key = f"piket_ganjil_{piket_class_ganjil}"
+            if st.button("🔄 Hitung Rekapitulasi Semester Ganjil", type="primary", key="btn_piket_ganjil"):
+                with st.spinner("Memuat data Semester Ganjil..."):
+                    st.session_state[piket_ganjil_key] = calculate_ganjil_recap(piket_class_ganjil)
+                    
+            if piket_ganjil_key in st.session_state:
+                st.dataframe(st.session_state[piket_ganjil_key], use_container_width=True, hide_index=True)
+
+        with tab_piket_genap:
+            piket_class_genap = st.selectbox("🏫 Pilih Kelas untuk Rekap Semester Genap:", classes, key="piket_c_genap")
+            st.subheader(f"🌸 Rekapitulasi Kehadiran Semester Genap (Januari - Juni) Kelas {piket_class_genap}")
+            
+            piket_genap_key = f"piket_genap_{piket_class_genap}"
+            if st.button("🔄 Hitung Rekapitulasi Semester Genap", type="primary", key="btn_piket_genap"):
+                with st.spinner("Memuat data Semester Genap..."):
+                    st.session_state[piket_genap_key] = calculate_genap_recap(piket_class_genap)
+                    
+            if piket_genap_key in st.session_state:
+                st.dataframe(st.session_state[piket_genap_key], use_container_width=True, hide_index=True)
+
         with tab_piket_tahunan:
             piket_class_year = st.selectbox("🏫 Pilih Kelas untuk Rekapitulasi Tahunan:", classes, key="piket_c_y")
             st.subheader(f"📊 Rekapitulasi Total Kehadiran Kelas {piket_class_year} (12 Bulan)")
             
             piket_recap_key = f"piket_recap_{piket_class_year}"
-            if st.button("🔄 Hitung Rekapitulasi Kelas Ini", type="primary"):
+            if st.button("🔄 Hitung Rekapitulasi Kelas Ini", type="primary", key="btn_piket_tahunan"):
                 with st.spinner("Memuat data 12 bulan..."):
                     st.session_state[piket_recap_key] = calculate_yearly_recap(piket_class_year)
                     
@@ -710,9 +774,9 @@ else:
                                     ws.clear()
                                     ws.update(range_name='A1', values=[df_cleaned.columns.values.tolist()] + df_cleaned.values.tolist())
                                     fetch_all_master_df.clear()
-                                    fetch_attendance_data_from_gsheets.clear()  # <-- PERBAIKAN: Clear cache
+                                    fetch_attendance_data_from_gsheets.clear()
                                     for k in list(st.session_state.keys()):
-                                        if k.startswith("df_") or k.startswith("yearly_recap_") or k.startswith("piket_recap_"):
+                                        if k.startswith("df_") or "recap" in k:
                                             del st.session_state[k]
                                 st.success("🎉 Master siswa 18 kelas seluruh sekolah berhasil ditimpa dari file import!")
                                 st.rerun()
@@ -734,9 +798,9 @@ else:
                     ws.clear()
                     ws.update(range_name='A1', values=[df_cleaned.columns.values.tolist()] + df_cleaned.values.tolist())
                     fetch_all_master_df.clear()
-                    fetch_attendance_data_from_gsheets.clear()  # <-- PERBAIKAN: Clear cache
+                    fetch_attendance_data_from_gsheets.clear()
                     for k in list(st.session_state.keys()):
-                        if k.startswith("df_") or k.startswith("yearly_recap_") or k.startswith("piket_recap_"):
+                        if k.startswith("df_") or "recap" in k:
                             del st.session_state[k]
                 st.success("🔒 Database pusat 18 kelas sekolah berhasil dikunci!")
                 st.rerun()
