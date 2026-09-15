@@ -172,6 +172,24 @@ def save_config_passwords(password_dict):
     fetch_config_passwords.clear()
     fetch_sheet_with_retry.clear("CONFIG")
 
+# --- KONFIGURASI PESAN POP-UP HALAMAN AWAL ---
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_popup_config():
+    config = fetch_config_passwords()
+    return {
+        "POPUP_ENABLED": config.get("POPUP_ENABLED", "FALSE"),
+        "POPUP_TITLE": config.get("POPUP_TITLE", "📢 Pengumuman Penting"),
+        "POPUP_MESSAGE": config.get("POPUP_MESSAGE", "Selamat datang di Sistem Absensi & Kedisiplinan Siswa.")
+    }
+
+def save_popup_config(enabled, title, message):
+    config = fetch_config_passwords()
+    config["POPUP_ENABLED"] = "TRUE" if enabled else "FALSE"
+    config["POPUP_TITLE"] = str(title)
+    config["POPUP_MESSAGE"] = str(message)
+    save_config_passwords(config)
+    fetch_popup_config.clear()
+
 # --- 4. LOG KETERLAMBATAN, FLAGGING & KONSELING ---
 def fetch_lateness_logs(): return fetch_sheet_with_retry("LOG_KETERLAMBATAN")
 
@@ -439,6 +457,23 @@ def generate_ai_student_narrative(student_name, risk_row):
     elif risk_row['Zona Risiko'] == "ZONA KUNING": narrative += "\n💡 **Rekomendasi Tindakan (Wali Kelas):** Siswa dalam Zona Waspada. Wali Kelas disarankan melakukan dialog personal."
     else: narrative += "\n✨ **Rekomendasi Tindakan:** Pertahankan motivasi belajar siswa dan berikan apresiasi atas kedisiplinan yang terjaga."
     return narrative
+
+# --- RENDER POP-UP DIALOG UNTUK HALAMAN AWAL ---
+if hasattr(st, "dialog"):
+    @st.dialog("📢 Informasi Sekolah")
+    def display_popup_dialog(title, message):
+        st.subheader(title)
+        st.write(message)
+        if st.button("Tutup", type="primary"):
+            st.session_state.popup_shown = True
+            st.rerun()
+
+popup_cfg = fetch_popup_config()
+if popup_cfg.get("POPUP_ENABLED") == "TRUE" and not st.session_state.get("popup_shown", False):
+    if hasattr(st, "dialog"):
+        display_popup_dialog(popup_cfg.get("POPUP_TITLE"), popup_cfg.get("POPUP_MESSAGE"))
+    else:
+        st.warning(f"**{popup_cfg.get('POPUP_TITLE')}**\n\n{popup_cfg.get('POPUP_MESSAGE')}")
 
 # --- 7. OTENTIKASI & USER INTERFACE TERPISAH ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
@@ -919,7 +954,7 @@ else:
     # 5. ADMIN SYSTEM
     elif st.session_state.user_role in ["Admin", "Administrator System"]:
         st.title("🛠️ Pusat Pengaturan Administrator System")
-        tab_pass, tab_master_all = st.tabs(["🔐 Kelola Pengguna (CRUD)", "👥 Kelola Data Master Siswa (CRUD & I/O)"])
+        tab_pass, tab_master_all, tab_popup_admin = st.tabs(["🔐 Kelola Pengguna (CRUD)", "👥 Kelola Data Master Siswa (CRUD & I/O)", "📢 Pop-up Pengumuman"])
         
         with tab_pass:
             st.subheader("🔐 Manajemen Akun Pengguna & Akses Hak Masuk")
@@ -1028,3 +1063,19 @@ else:
                                     st.success("🎉 Database Master Siswa Seluruh Kelas berhasil diperbarui!")
                                     st.rerun()
                             except Exception as ex: st.error(f"❌ Error membaca file: {ex}")
+
+        with tab_popup_admin:
+            st.subheader("📢 Pengaturan Pesan Pop-up Pengumuman Halaman Awal")
+            st.caption("Gunakan modul ini untuk mengaktifkan, mengubah judul, dan menulis pesan pengumuman yang muncul saat pengguna pertama kali membuka portal.")
+            
+            curr_popup_cfg = fetch_popup_config()
+            
+            with st.form("form_manage_popup"):
+                p_enabled = st.checkbox("Aktifkan Pop-up Pengumuman", value=(curr_popup_cfg.get("POPUP_ENABLED") == "TRUE"))
+                p_title = st.text_input("Judul Pop-up Pengumuman:", value=curr_popup_cfg.get("POPUP_TITLE", "📢 Pengumuman Penting"))
+                p_message = st.text_area("Isi Pesan Pengumuman:", value=curr_popup_cfg.get("POPUP_MESSAGE", ""), height=150)
+                
+                if st.form_submit_button("💾 Simpan Pengaturan Pop-up", type="primary"):
+                    save_popup_config(p_enabled, p_title, p_message)
+                    st.success("🎉 Konfigurasi pop-up pengumuman berhasil disimpan ke database!")
+                    st.rerun()
