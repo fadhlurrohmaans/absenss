@@ -195,21 +195,41 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
     
     df_flags = fetch_flags()
     if not df_flags.empty and 'Nama Siswa' in df_flags.columns and 'Tanggal' in df_flags.columns:
-        # Koreksi: Mencegah spam klik (Flag tipe dan tanggal yang sama persis), BUKAN memblokir 1 minggu penuh
+        # Cek duplikasi: Siswa yang sama, Hari yang sama, Tipe yang sama
         existing = df_flags[(df_flags['Nama Siswa'] == nama) & (df_flags['Tanggal'] == str(dt)) & (df_flags['Tipe'] == tipe)]
+        
         if len(existing) > 0:
-            return False, f"⚠️ Siswa '{nama}' sudah diberikan flagging {tipe} pada hari ini."
+            idx = existing.index[0] # Ambil baris pertama yang cocok
+            existing_catatan = str(existing.at[idx, 'Catatan'])
+            
+            # Periksa apakah catatan baru persis sama atau sudah ada di dalam catatan lama
+            if catatan.strip().lower() in existing_catatan.lower():
+                return False, f"⚠️ Siswa '{nama}' sudah mendapatkan flagging {tipe} dengan deskripsi yang sama pada hari ini."
+            else:
+                try:
+                    # Append deskripsi baru jika berbeda
+                    new_catatan = existing_catatan + " | " + catatan.strip()
+                    ws = sh.worksheet("FLAGS_PERILAKU")
+                    
+                    # Update sel Google Sheets secara spesifik. Baris = index + 2 (Header = 1, Index offset = 1), Kolom Catatan = 7
+                    ws.update_cell(int(idx) + 2, 7, new_catatan)
+                    fetch_sheet_with_retry.clear("FLAGS_PERILAKU")
+                    return True, "✅ Catatan baru berhasil ditambahkan pada record flagging hari ini!"
+                except Exception as e:
+                    return False, f"Gagal mengupdate flag: {e}"
+
+    # Jika tidak ada duplikasi, simpan sebagai baris baru
     try:
         try: ws = sh.worksheet("FLAGS_PERILAKU")
         except WorksheetNotFound:
             ws = sh.add_worksheet("FLAGS_PERILAKU", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'TahunMinggu', 'Kelas', 'Nama Siswa', 'Tipe', 'Kategori', 'Catatan', 'Pencatat'])
             get_existing_worksheet_names.clear()
+            
         ws.append_row([str(dt), year_week, kelas, nama, tipe, kategori, catatan, pencatat])
         fetch_sheet_with_retry.clear("FLAGS_PERILAKU")
         return True, "✅ Flagging perilaku berhasil dicatat!"
     except Exception as e: return False, f"Gagal menyimpan flag: {e}"
-
 def fetch_counseling_logs(): return fetch_sheet_with_retry("KONSELING_BK")
 
 def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, konselor):
@@ -647,19 +667,37 @@ else:
             else: st.warning("Daftar siswa belum diisi di kelas ini.")
         with tab_flagging:
             st.subheader("🚩 Form Flagging Perilaku Siswa")
+            
+            # Pindahkan Selectbox KELUAR dari Form agar Riwayat bisa interaktif
+            f_class = st.selectbox("Kelas Siswa:", classes, key="flag_c")
+            f_students = get_master_students(f_class)
+            f_student = st.selectbox("Pilih Siswa:", f_students) if f_students else None
+            
+            # --- FITUR BARU: TAMPILKAN RIWAYAT MINI ---
+            if f_student:
+                df_all_flags = fetch_flags()
+                if not df_all_flags.empty and 'Nama Siswa' in df_all_flags.columns:
+                    s_history = df_all_flags[df_all_flags['Nama Siswa'] == f_student]
+                    if not s_history.empty:
+                        with st.expander(f"🔍 Riwayat 3 Perilaku Terakhir: {f_student}"):
+                            # Mengambil 3 baris terakhir, mengurutkannya agar yang paling baru di atas
+                            st.dataframe(s_history.tail(3).sort_values(by='Tanggal', ascending=False)[['Tanggal', 'Tipe', 'Kategori', 'Catatan']], use_container_width=True, hide_index=True)
+                    else:
+                        st.caption(f"ℹ️ Belum ada riwayat flagging untuk {f_student}.")
+
+            # Form Input Flagging (Hanya untuk radio button, kategori, dan catatan)
             with st.form("form_flagging"):
-                f_class = st.selectbox("Kelas Siswa:", classes, key="flag_c")
-                f_students = get_master_students(f_class)
-                f_student = st.selectbox("Pilih Siswa:", f_students) if f_students else None
                 f_type = st.radio("Jenis Flagging:", ["POSITIF", "NEGATIF"], horizontal=True)
                 f_category = st.selectbox("Kategori Perilaku:", ["Ketertiban / Kerapihan", "Kedisiplinan Jam Pelajaran", "Prestasi / Kerjasama", "Pelanggaran Tata Tertib", "Bullying / Perkelahian", "Lainnya"])
                 f_catatan = st.text_area("Deskripsi Catatan :")
+                
                 if st.form_submit_button("🚩 Kirim Flagging Perilaku"):
                     if f_student:
                         success, msg = save_flag_entry(datetime.date.today(), f_class, f_student, f_type, f_category, f_catatan, "Guru Piket")
-                        if success: st.success(msg)
-                        else: st.warning(msg)
-
+                        if success: 
+                            st.success(msg)
+                        else: 
+                            st.warning(msg)
     # 3. GURU BK
     elif st.session_state.user_role == "Guru BK":
         st.title("📊 Dashboard Eksekutif Bimbingan Konseling (BK)")
