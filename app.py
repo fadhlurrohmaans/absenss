@@ -69,21 +69,21 @@ def get_year_for_month(month_name):
 
 initial_students = ['ACHMAD FAIRUZ', 'ADARA DWI NOVITA', 'ADELAMULIA PUTRI FAJARINO', 'AHMAD DENIS RUBIANSYAH']
 
-# --- 1. KONEKSI GOOGLE SHEETS ---
+# --- 1. KONEKSI GOOGLE SHEETS (DENGAN CACHE RESOURCE UNTUK PENGHENTIAN ERROR 429) ---
 @st.cache_resource(show_spinner=False)
-def get_gspread_client():
+def get_gspread_spreadsheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     credentials = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-    return gspread.authorize(credentials)
+    client = gspread.authorize(credentials)
+    return client.open_by_key(st.secrets["spreadsheet_id"])
 
 try:
-    client = get_gspread_client()
-    sh = client.open_by_key(st.secrets["spreadsheet_id"])
+    sh = get_gspread_spreadsheet()
 except Exception as e:
     st.error(f"❌ Gagal terhubung ke Database Google Sheets: {e}")
     st.stop()
 
-# --- 2. LAZY FETCHING DENGAN CACHE & BACKOFF RETRY ---
+# --- 2. LAZY FETCHING DENGAN CACHE & EXPONENTIAL BACKOFF RETRY ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_sheet_with_retry(sheet_name):
     max_retries = 5
@@ -95,7 +95,7 @@ def fetch_sheet_with_retry(sheet_name):
             return pd.DataFrame()
         except APIError as e:
             if "429" in str(e) and attempt < max_retries - 1:
-                time.sleep(3 * (attempt + 1))
+                time.sleep(2 ** (attempt + 1))  # Exponential backoff (2s, 4s, 8s, 16s)
                 continue
             return pd.DataFrame()
         except Exception:
