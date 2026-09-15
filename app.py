@@ -155,10 +155,12 @@ def fetch_config_passwords():
     if not df.empty and 'Key' in df.columns and 'Password' in df.columns:
         return dict(zip(df['Key'].astype(str), df['Password'].astype(str)))
     
-    keys = ['Admin', 'Guru Piket', 'Guru BK', 'Kepala Sekolah'] + classes + [f"Wali{c}" for c in classes]
+    keys = ['Admin', 'Guru Piket', 'Guru BK', 'Kepala Sekolah'] + classes + [f"Wali{c}" for c in classes] + [f"KK{c}" for c in classes]
+    
     default_passwords = ['admin123', 'piket123', 'bk123', 'kepsek123'] + \
                         [f"{c.lower()}123" for c in classes] + \
-                        [f"wali{c.lower()}" for c in classes]
+                        [f"wali{c.lower()}" for c in classes] + \
+                        [f"KK{c}123" for c in classes]
     
     return dict(zip(keys, default_passwords))
 
@@ -469,13 +471,17 @@ if not st.session_state.logged_in:
     with login_tab_wali:
         with st.form("form_login_wali"):
             st.subheader("Login Ruang Kelas")
-            role_wali = st.radio("Masuk Sebagai:", ["Sekretaris Kelas", "Wali Kelas"], horizontal=True)
+            role_wali = st.radio("Masuk Sebagai:", ["Sekretaris Kelas", "Wali Kelas", "Ketua Kelas"], horizontal=True)
             target_class = st.selectbox("Pilih Kelas Anda:", classes, key="sel_wali_class")
             password_wali = st.text_input("Masukkan Password:", type="password", key="pass_wali")
             
             if st.form_submit_button("🔑 Masuk Ke Ruang Kelas", type="primary"):
                 passwords = fetch_config_passwords()
-                login_key = target_class if role_wali == "Sekretaris Kelas" else f"Wali{target_class}"
+                
+                # Logika penentuan login key
+                if role_wali == "Sekretaris Kelas": login_key = target_class
+                elif role_wali == "Wali Kelas": login_key = f"Wali{target_class}"
+                elif role_wali == "Ketua Kelas": login_key = f"KK{target_class}"
                 
                 if password_wali == passwords.get(login_key):
                     st.session_state.logged_in = True
@@ -483,8 +489,7 @@ if not st.session_state.logged_in:
                     st.session_state.assigned_class = target_class
                     st.rerun()
                 else:
-                    st.error("❌ Password Salah! Pastikan Anda menggunakan sandi yang benar sesuai peran (Sekretaris/Wali).")
-                    
+                    st.error("❌ Password Salah! Pastikan Anda menggunakan sandi yang benar sesuai peran.")                
     with login_tab_staf:
         with st.form("form_login_staf"):
             st.subheader("Login Staf & Manajemen Sekolah")
@@ -504,11 +509,12 @@ if not st.session_state.logged_in:
                     st.error("❌ Password Akun Salah!")
 
 else:
-    # 1. SEKRETARIS KELAS & WALI KELAS
-    if st.session_state.user_role in ["Sekretaris Kelas", "Wali Kelas"]:
+    # 1. SEKRETARIS KELAS, WALI KELAS & KETUA KELAS
+    if st.session_state.user_role in ["Sekretaris Kelas", "Wali Kelas", "Ketua Kelas"]:
         my_class = st.session_state.assigned_class
         st.title(f"🏫 Ruang Kerja {st.session_state.user_role} {my_class}")
         
+        # Pengaturan pembagian Tab sesuai hak akses
         if st.session_state.user_role == "Wali Kelas":
             tabs = st.tabs([
                 "📝 Isi Absensi Bulanan (Grid)", 
@@ -519,10 +525,16 @@ else:
                 "👥 Kelola Master Siswa"
             ])
             tab_absen, tab_ganjil, tab_genap, tab_rekap, tab_risk, tab_nama = tabs
-        else:
+        elif st.session_state.user_role == "Sekretaris Kelas":
             tabs = st.tabs(["📝 Isi Absensi Bulanan (Grid)"])
             tab_absen = tabs[0]
+        elif st.session_state.user_role == "Ketua Kelas":
+            tabs = st.tabs(["🚩 Lapor Perilaku Siswa (Khusus Negatif)"])
+            tab_flag = tabs[0]
         
+        # Eksekusi Tab Absensi HANYA untuk Sekretaris dan Wali Kelas
+        if st.session_state.user_role in ["Sekretaris Kelas", "Wali Kelas"]:
+                # ... (Biarkan semua kode isi `with tab_absen:` persis seperti aslinya di sini) ...
         with tab_absen:
             selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
             col_config, disabled_cols, monthly_holidays = get_calendar_config(selected_month)
@@ -646,6 +658,27 @@ else:
                     save_master_students(my_class, new_names)
                     st.success("🎉 Daftar nama berhasil diselaraskan!")
                     st.rerun()
+                    # Modul Khusus Ketua Kelas
+        if st.session_state.user_role == "Ketua Kelas":
+            with tab_flag:
+                st.subheader(f"🚩 Form Pelaporan Pelanggaran - Kelas {my_class}")
+                f_students = get_master_students(my_class)
+
+                with st.form("form_kk_flagging"):
+                    f_student = st.selectbox("Pilih Siswa yang Dilaporkan:", f_students) if f_students else None
+
+                    st.info("ℹ️ Sesuai wewenang, Ketua Kelas hanya dapat melaporkan catatan perilaku **NEGATIF** untuk teman sekelasnya.")
+
+                    f_category = st.selectbox("Kategori Pelanggaran:", ["Ketertiban / Kerapihan", "Kedisiplinan Jam Pelajaran", "Pelanggaran Tata Tertib", "Bullying / Perkelahian", "Lainnya"])
+                    f_catatan = st.text_area("Deskripsi Kejadian:")
+
+                    if st.form_submit_button("🚩 Kirim Laporan Pelanggaran", type="primary"):
+                        if f_student:
+                            success, msg = save_flag_entry(datetime.date.today(), my_class, f_student, "NEGATIF", f_category, f_catatan, f"Ketua Kelas {my_class}")
+                            if success: 
+                                st.success("✅ Laporan pelanggaran berhasil dikirimkan ke Guru BK dan Wali Kelas.")
+                            else: 
+                                st.warning(msg)
 
     # 2. GURU PIKET
     elif st.session_state.user_role == "Guru Piket / Pelajaran":
