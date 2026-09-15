@@ -83,7 +83,7 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Database Google Sheets: {e}")
     st.stop()
 
-# --- OPTIMASI UTAMA: CACHE NAMA WORKSHEET UNTUK MENCEGAH LATENCY API ---
+# --- CACHE NAMA WORKSHEET ---
 @st.cache_data(ttl=300, show_spinner=False)
 def get_existing_worksheet_names():
     try:
@@ -197,30 +197,24 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
     
     df_flags = fetch_flags()
     if not df_flags.empty and 'Nama Siswa' in df_flags.columns and 'Tanggal' in df_flags.columns:
-        # Cek duplikasi: Siswa yang sama, Hari yang sama, Tipe yang sama
         existing = df_flags[(df_flags['Nama Siswa'] == nama) & (df_flags['Tanggal'] == str(dt)) & (df_flags['Tipe'] == tipe)]
         
         if len(existing) > 0:
-            idx = existing.index[0] # Ambil baris pertama yang cocok
+            idx = existing.index[0]
             existing_catatan = str(existing.at[idx, 'Catatan'])
             
-            # Periksa apakah catatan baru persis sama atau sudah ada di dalam catatan lama
             if catatan.strip().lower() in existing_catatan.lower():
                 return False, f"⚠️ Siswa '{nama}' sudah mendapatkan flagging {tipe} dengan deskripsi yang sama pada hari ini."
             else:
                 try:
-                    # Append deskripsi baru jika berbeda
                     new_catatan = existing_catatan + " | " + catatan.strip()
                     ws = sh.worksheet("FLAGS_PERILAKU")
-                    
-                    # Update sel Google Sheets secara spesifik. Baris = index + 2 (Header = 1, Index offset = 1), Kolom Catatan = 7
                     ws.update_cell(int(idx) + 2, 7, new_catatan)
                     fetch_sheet_with_retry.clear("FLAGS_PERILAKU")
                     return True, "✅ Catatan baru berhasil ditambahkan pada record flagging hari ini!"
                 except Exception as e:
                     return False, f"Gagal mengupdate flag: {e}"
 
-    # Jika tidak ada duplikasi, simpan sebagai baris baru
     try:
         try: ws = sh.worksheet("FLAGS_PERILAKU")
         except WorksheetNotFound:
@@ -232,6 +226,7 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
         fetch_sheet_with_retry.clear("FLAGS_PERILAKU")
         return True, "✅ Flagging perilaku berhasil dicatat!"
     except Exception as e: return False, f"Gagal menyimpan flag: {e}"
+
 def fetch_counseling_logs(): return fetch_sheet_with_retry("KONSELING_BK")
 
 def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, konselor):
@@ -252,7 +247,6 @@ def fetch_attendance_data_from_cache(kelas, month):
     sheet_name = f"{kelas}_{month}"
     existing_sheets = get_existing_worksheet_names()
     
-    # Langsung kembalikan template kosong jika sheet belum pernah dibuat (Mencegah API Request lambat)
     df_stored = fetch_sheet_with_retry(sheet_name) if sheet_name in existing_sheets else pd.DataFrame()
     
     year = get_year_for_month(month)
@@ -394,7 +388,7 @@ def get_class_alpa_summary(kelas, existing_sheets=None):
     for m in months:
         sheet_name = f"{kelas}_{m}"
         if sheet_name not in existing_sheets:
-            continue  # MELEWATI KELAS/BULAN YANG BELUM ADA DI GOOGLE SHEETS
+            continue
             
         df_m = fetch_attendance_data_from_cache(kelas, m)
         rep = generate_full_report(df_m)
@@ -467,7 +461,8 @@ if not st.session_state.logged_in:
     st.caption("GovTech Education Platform - Integrated Early Warning System")
     
     login_tab_wali, login_tab_staf = st.tabs(["🏫 Wali Kelas dan Perangkat Kelas", "🏢 Guru Piket, BK, Kepsek & Admin"])
-with login_tab_wali:
+    
+    with login_tab_wali:
         with st.form("form_login_wali"):
             st.subheader("Login Ruang Kelas")
             role_wali = st.selectbox("Masuk Sebagai:", ["Sekretaris Kelas", "Wali Kelas", "Ketua Kelas"], key="sel_role_wali")
@@ -490,7 +485,7 @@ with login_tab_wali:
                 else:
                     st.error("❌ Password Salah! Pastikan Anda menggunakan sandi yang benar sesuai peran.")    
     
-with login_tab_staf:
+    with login_tab_staf:
         with st.form("form_login_staf"):
             st.subheader("Login Staf & Manajemen Sekolah")
             role_staf = st.selectbox("Pilih Peran / Akses Peran:", ["Guru Piket / Pelajaran", "Guru BK", "Kepala Sekolah", "Administrator System"], key="sel_staf_role")
@@ -532,7 +527,6 @@ else:
             tabs = st.tabs(["🚩 Lapor Perilaku Siswa (Khusus Negatif)"])
             tab_flag = tabs[0]
         
-        # Eksekusi Tab Absensi HANYA untuk Sekretaris dan Wali Kelas
         # Eksekusi Tab Absensi HANYA untuk Sekretaris dan Wali Kelas
         if st.session_state.user_role in ["Sekretaris Kelas", "Wali Kelas"]:
             with tab_absen:
@@ -576,10 +570,8 @@ else:
                 full_report = generate_full_report(edited_df)
                 st.dataframe(full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '% Hadir', '% Izin', '% Alpha', '% Sakit']], use_container_width=True)
 
-        # Bagian ini sejajar kembali dengan 'if' di atasnya
         if st.session_state.user_role == "Wali Kelas":
             with tab_ganjil:
-                # ... dan seterusnya ...
                 st.subheader(f"🍂 Rekapitulasi Semester Ganjil (Juli - Desember) - Kelas {my_class}")
                 if st.button("🔄 Muat / Perbarui Rekap Semester Ganjil", type="primary", key="btn_ganjil_sk"):
                     with st.spinner("Kalkulasi Semester Ganjil..."):
@@ -660,7 +652,7 @@ else:
                     save_master_students(my_class, new_names)
                     st.success("🎉 Daftar nama berhasil diselaraskan!")
                     st.rerun()
-                    # Modul Khusus Ketua Kelas
+
         if st.session_state.user_role == "Ketua Kelas":
             with tab_flag:
                 st.subheader(f"🚩 Form Pelaporan Pelanggaran - Kelas {my_class}")
@@ -702,25 +694,20 @@ else:
             else: st.warning("Daftar siswa belum diisi di kelas ini.")
         with tab_flagging:
             st.subheader("🚩 Form Flagging Perilaku Siswa")
-            
-            # Pindahkan Selectbox KELUAR dari Form agar Riwayat bisa interaktif
             f_class = st.selectbox("Kelas Siswa:", classes, key="flag_c")
             f_students = get_master_students(f_class)
             f_student = st.selectbox("Pilih Siswa:", f_students) if f_students else None
             
-            # --- FITUR BARU: TAMPILKAN RIWAYAT MINI ---
             if f_student:
                 df_all_flags = fetch_flags()
                 if not df_all_flags.empty and 'Nama Siswa' in df_all_flags.columns:
                     s_history = df_all_flags[df_all_flags['Nama Siswa'] == f_student]
                     if not s_history.empty:
                         with st.expander(f"🔍 Riwayat 3 Perilaku Terakhir: {f_student}"):
-                            # Mengambil 3 baris terakhir, mengurutkannya agar yang paling baru di atas
                             st.dataframe(s_history.tail(3).sort_values(by='Tanggal', ascending=False)[['Tanggal', 'Tipe', 'Kategori', 'Catatan']], use_container_width=True, hide_index=True)
                     else:
                         st.caption(f"ℹ️ Belum ada riwayat flagging untuk {f_student}.")
 
-            # Form Input Flagging (Hanya untuk radio button, kategori, dan catatan)
             with st.form("form_flagging"):
                 f_type = st.radio("Jenis Flagging:", ["POSITIF", "NEGATIF"], horizontal=True)
                 f_category = st.selectbox("Kategori Perilaku:", ["Ketertiban / Kerapihan", "Kedisiplinan Jam Pelajaran", "Prestasi / Kerjasama", "Pelanggaran Tata Tertib", "Bullying / Perkelahian", "Lainnya"])
@@ -733,6 +720,7 @@ else:
                             st.success(msg)
                         else: 
                             st.warning(msg)
+
     # 3. GURU BK
     elif st.session_state.user_role == "Guru BK":
         st.title("📊 Dashboard Eksekutif Bimbingan Konseling (BK)")
@@ -819,13 +807,12 @@ else:
                     else: st.info("Belum ada riwayat konseling untuk kelas ini.")
                 else: st.info("Belum ada data konseling tersimpan di database.")
 
-# 4. KEPALA SEKOLAH (DIOPTIMASI UNTUK EKSEKUSI CEPAT)
+    # 4. KEPALA SEKOLAH
     elif st.session_state.user_role == "Kepala Sekolah":
         st.title("🏛️ Dashboard Makro Eksekutif - Kepala Sekolah")
         
         tab_kepsek_risk, tab_kepsek_absen = st.tabs(["🛡️ Makro Kedisiplinan (Risiko)", "📊 Makro Kehadiran (Semester & Tahunan)"])
         
-        # --- TAB 1: MAKRO KEDISIPLINAN (KODE EKSISTING) ---
         with tab_kepsek_risk:
             st.subheader("🛡️ Agregasi Zona Risiko Kedisiplinan")
             if st.button("🔄 Muat Data Eksekutif Makro Seluruh Kelas", type="primary", key="btn_kepsek_risk"):
@@ -833,7 +820,6 @@ else:
                     df_late_all = fetch_lateness_logs()
                     df_flags_all = fetch_flags()
                     
-                    # Mengambil daftar sheet hanya 1 kali
                     existing_sheets = get_existing_worksheet_names()
                     
                     macro_summary, all_red_students = [], []
@@ -871,7 +857,6 @@ else:
                 else: st.success("🎉 Tidak ada siswa dalam Zona Merah di seluruh kelas!")
             else: st.info("Klik tombol di atas untuk memuat laporan risiko tingkat sekolah.")
 
-        # --- TAB 2: MAKRO KEHADIRAN (FITUR BARU) ---
         with tab_kepsek_absen:
             st.subheader("📊 Rekapitulasi Kehadiran Makro Seluruh Kelas")
             
@@ -881,7 +866,6 @@ else:
             
             if st.button("🔄 Kalkulasi Rekap Kehadiran", type="primary", key="btn_kepsek_absen"):
                 with st.spinner(f"Menarik & mengkalkulasi data kehadiran {periode_pilihan} dari seluruh kelas..."):
-                    # Tentukan target bulan berdasarkan pilihan
                     if periode_pilihan == "Semester Ganjil": target_months = ganjil_months
                     elif periode_pilihan == "Semester Genap": target_months = genap_months
                     else: target_months = months
@@ -893,14 +877,12 @@ else:
                         c_s, c_i, c_a, c_h = 0, 0, 0, 0
                         for m in target_months:
                             sheet_name = f"{c}_{m}"
-                            # Jika sheet bulan kelas tersebut belum dibuat, lewati untuk cegah error API
                             if sheet_name not in existing_sheets:
                                 continue
                             
                             df_m = fetch_attendance_data_from_cache(c, m)
                             rep_m = generate_full_report(df_m)
                             
-                            # Menjumlahkan total S, I, A, H untuk kelas tersebut pada bulan ini
                             c_s += rep_m['S'].sum()
                             c_i += rep_m['I'].sum()
                             c_a += rep_m['A'].sum()
@@ -928,12 +910,12 @@ else:
                 
                 st.write("---")
                 st.subheader("📈 Visualisasi Tingkat Kehadiran per Kelas")
-                # Membuat bar chart sederhana untuk persentase kehadiran
                 chart_data = df_macro_absen[['Kelas', '% Hadir']].copy()
                 chart_data['% Hadir'] = chart_data['% Hadir'].str.rstrip('%').astype(float)
                 st.bar_chart(chart_data.set_index('Kelas'))
             else:
                 st.info("Pilih periode dan klik tombol kalkulasi untuk memuat data absensi makro.")
+
     # 5. ADMIN SYSTEM
     elif st.session_state.user_role in ["Admin", "Administrator System"]:
         st.title("🛠️ Pusat Pengaturan Administrator System")
