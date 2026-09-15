@@ -769,7 +769,7 @@ else:
             st.info("Klik tombol di atas untuk memuat laporan makro seluruh kelas.")
 
     # 5. ADMIN SYSTEM (MODUL UTAMA YANG DITINGKATKAN)
-    elif st.session_state.user_role == "Admin":
+    elif st.session_state.user_role in ["Admin", "Administrator System"]:
         st.title("🛠️ Pusat Pengaturan Administrator System")
         tab_pass, tab_master_all = st.tabs(["🔐 Kelola Pengguna (CRUD)", "👥 Kelola Data Master Siswa (CRUD & I/O)"])
         
