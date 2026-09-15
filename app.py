@@ -466,7 +466,7 @@ if not st.session_state.logged_in:
     st.title("🔐 Login Sistem Keamanan Absensi & Kedisiplinan")
     st.caption("GovTech Education Platform - Integrated Early Warning System")
     
-    login_tab_wali, login_tab_staf = st.tabs(["🏫 Sekretaris / Wali Kelas", "🏢 Guru Piket, BK, Kepsek & Admin"])
+    login_tab_wali, login_tab_staf = st.tabs(["🏫 Wali Kelas dan Perangkat Kelas", "🏢 Guru Piket, BK, Kepsek & Admin"])
     
     with login_tab_wali:
         with st.form("form_login_wali"):
