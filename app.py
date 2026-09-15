@@ -690,85 +690,190 @@ else:
                         if success: st.success(msg)
                         else: st.warning(msg)
 
-    # 3. GURU BK
+    # 3. GURU BK (DASHBOARD EKSEKUTIF BK TERPRODUKSI)
     elif st.session_state.user_role == "Guru BK":
         st.title("📊 Dashboard Eksekutif Bimbingan Konseling (BK)")
-        target_c = st.selectbox("Pilih Kelas Pantauan BK:", classes)
+        target_c = st.selectbox("🎯 Pilih Kelas Pantauan Utama BK:", classes, key="bk_target_class")
         
-        tab_exec_risk, tab_counseling = st.tabs(["🎯 Matriks Risk Scoring & AI Evaluation", "📝 Modul Pemanggilan / Konseling BK"])
+        tab_rekap_bk, tab_exec_risk, tab_counseling = st.tabs([
+            "📊 Rekap & Agregasi Kedisiplinan", 
+            "🎯 Risk Scoring & Grafik Tren AI", 
+            "📝 Modul Pemanggilan & Konseling BK"
+        ])
         
+        # --- TAB 1: REKAP & AGREGASI KEDISIPLINAN ---
+        with tab_rekap_bk:
+            st.subheader(f"📑 Rekap Harian, Bulanan & Flagging Guru - Kelas {target_c}")
+            
+            df_lateness_all = fetch_lateness_logs()
+            df_flags_all = fetch_flags()
+            
+            c_late = df_lateness_all[df_lateness_all['Kelas'] == target_c] if not df_lateness_all.empty and 'Kelas' in df_lateness_all.columns else pd.DataFrame()
+            c_flags = df_flags_all[df_flags_all['Kelas'] == target_c] if not df_flags_all.empty and 'Kelas' in df_flags_all.columns else pd.DataFrame()
+            
+            col_bk1, col_bk2, col_bk3 = st.columns(3)
+            tot_late_min = c_late['Menit Terlambat'].astype(int).sum() if not c_late.empty else 0
+            tot_pos_flag = len(c_flags[c_flags['Tipe'] == 'POSITIF']) if not c_flags.empty else 0
+            tot_neg_flag = len(c_flags[c_flags['Tipe'] == 'NEGATIF']) if not c_flags.empty else 0
+            
+            col_bk1.metric("⏱️ Total Menit Terlambat Kelas", f"{tot_late_min} Menit")
+            col_bk2.metric("🚩 Catatan Perilaku Negatif", f"{tot_neg_flag} Kasus")
+            col_bk3.metric("✨ Catatan Perilaku Positif", f"{tot_pos_flag} Apresiasi")
+            
+            st.write("---")
+            col_df_l, col_df_f = st.columns(2)
+            with col_df_l:
+                st.markdown("##### ⏱️ Riwayat Keterlambatan (Piket)")
+                if not c_late.empty:
+                    st.dataframe(c_late.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Belum ada catatan keterlambatan untuk kelas ini.")
+                    
+            with col_df_f:
+                st.markdown("##### 🚩 Riwayat Catatan Perilaku Guru")
+                if not c_flags.empty:
+                    st.dataframe(c_flags.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Belum ada riwayat flagging perilaku dari guru.")
+
+        # --- TAB 2: RISK SCORING & GRAFIK TREN AI ---
         with tab_exec_risk:
-            st.subheader(f"🛡️ Analisis Risiko Kedisiplinan - Kelas {target_c}")
-            if st.button("🔄 Hitung Risiko Kelas Ini", type="primary", key="btn_bk_calc"):
-                with st.spinner("Menghitung data risiko kelas..."):
+            st.subheader(f"🛡️ Sistem Risk Scoring & Tren Kedisiplinan - Kelas {target_c}")
+            
+            if st.button("🔄 Kalkulasi Matriks Risiko & Tren Terbaru", type="primary", key="btn_bk_calc_risk"):
+                with st.spinner("Mengkalkulasi tingkat risiko kedisiplinan & tren..."):
                     st.session_state[f"risk_bk_{target_c}"] = calculate_class_risk_table(target_c)
                     
             if f"risk_bk_{target_c}" in st.session_state:
                 df_risk = st.session_state[f"risk_bk_{target_c}"]
                 if not df_risk.empty:
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("🔴 Zona Merah (Bahaya)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA MERAH']))
-                    col2.metric("🟡 Zona Kuning (Waspada)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA KUNING']))
-                    col3.metric("🟢 Zona Hijau (Aman)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA HIJAU']))
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("🔴 Zona Merah (Bahaya)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA MERAH']))
+                    c2.metric("🟡 Zona Kuning (Waspada)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA KUNING']))
+                    c3.metric("🟢 Zona Hijau (Aman)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA HIJAU']))
                     
-                    st.dataframe(df_risk.sort_values(by='Skor Poin', ascending=False), use_container_width=True)
+                    st.markdown("##### 📋 Matriks Poin Risiko Kedisiplinan Siswa")
+                    st.dataframe(df_risk.sort_values(by='Skor Poin', ascending=False), use_container_width=True, hide_index=True)
                     
                     st.write("---")
-                    st.subheader("🤖 AI Narrative Evaluation Generator")
-                    selected_eval_student = st.selectbox("Pilih Siswa untuk Generasi Evaluasi AI:", df_risk['Nama Siswa'].tolist())
+                    st.subheader("📈 Grafik Tren Kedisiplinan Kelas")
+                    df_lateness_all = fetch_lateness_logs()
+                    if not df_lateness_all.empty and 'Kelas' in df_lateness_all.columns:
+                        c_late_trend = df_lateness_all[df_lateness_all['Kelas'] == target_c]
+                        if not c_late_trend.empty:
+                            trend_summary = c_late_trend.groupby('Tanggal')['Menit Terlambat'].astype(int).sum().reset_index()
+                            st.bar_chart(trend_summary.set_index('Tanggal'))
+                        else:
+                            st.caption("ℹ️ Belum ada tren grafik keterlambatan untuk kelas ini.")
                     
-                    if st.button("✨ Generasi Deskripsi Naratif AI"):
+                    st.write("---")
+                    st.subheader("🤖 Deskripsi Naratif Otomatis (AI Narrative Evaluation)")
+                    selected_eval_student = st.selectbox("Pilih Siswa untuk Generasi Laporan AI:", df_risk['Nama Siswa'].tolist(), key="bk_ai_select")
+                    
+                    if st.button("✨ Generasi Laporan Naratif AI"):
                         s_row = df_risk[df_risk['Nama Siswa'] == selected_eval_student].iloc[0].to_dict()
                         narrative_text = generate_ai_student_narrative(selected_eval_student, s_row)
                         st.markdown(narrative_text)
             else:
-                st.info("Klik tombol di atas untuk memuat analisis risiko kelas.")
+                st.info("Klik tombol di atas untuk memuat analisis risiko dan tren kelas.")
 
+        # --- TAB 3: MODUL PEMANGGILAN & KONSELING BK ---
         with tab_counseling:
-            st.subheader("📝 Modul Konseling & Tindak Lanjut")
+            st.subheader(f"📝 Modul Pemanggilan & Konseling Siswa - Kelas {target_c}")
             students = get_master_students(target_c)
-            with st.form("form_bk"):
-                c_student = st.selectbox("Nama Siswa:", students) if students else None
-                c_date = st.date_input("Tanggal Konseling:", datetime.date.today())
-                c_ringkasan = st.text_area("Ringkasan Hasil Wawancara / Sesi Konseling:")
-                c_rekomendasi = st.text_area("Rekomendasi Tindakan / Kesepakatan:")
-                c_status = st.selectbox("Status Penanganan:", ["OPEN", "IN_PROGRESS", "RESOLVED", "ESCALATED"])
-                
-                if st.form_submit_button("💾 Simpan Catatan Konseling"):
-                    if c_student:
-                        if save_counseling_log(c_date, target_c, c_student, c_ringkasan, c_rekomendasi, c_status, "Guru BK"):
-                            st.success("Catatan konseling berhasil disimpan!")
+            
+            counseling_col1, counseling_col2 = st.columns([1, 1])
+            
+            with counseling_col1:
+                st.markdown("##### ➕ Form Input Wawancara / Sesi Konseling")
+                with st.form("form_bk_session"):
+                    c_student = st.selectbox("Nama Siswa:", students) if students else None
+                    c_date = st.date_input("Tanggal Sesi / Pemanggilan:", datetime.date.today())
+                    c_ringkasan = st.text_area("Ringkasan Hasil Wawancara / Keluhan / Pelanggaran:", placeholder="Jelaskan alasan pemanggilan & poin wawancara...")
+                    c_rekomendasi = st.text_area("Rekomendasi Tindakan / Komitmen Siswa:", placeholder="Hasil komitmen, tindakan disiplin, atau rencana tindak lanjut...")
+                    c_status = st.selectbox("Penandatanganan / Status Penanganan:", ["OPEN", "IN_PROGRESS", "RESOLVED", "ESCALATED"])
+                    
+                    if st.form_submit_button("💾 Simpan Record Konseling BK", type="primary"):
+                        if c_student and c_ringkasan.strip():
+                            if save_counseling_log(c_date, target_c, c_student, c_ringkasan, c_rekomendasi, c_status, "Guru BK"):
+                                st.success(f"🎉 Catatan konseling untuk {c_student} berhasil tersimpan!")
+                                st.rerun()
+                        else:
+                            st.error("❌ Nama Siswa dan Ringkasan Wawancara wajib diisi!")
 
-    # 4. KEPALA SEKOLAH
+            with counseling_col2:
+                st.markdown("##### 📑 Riwayat Record Konseling Terdaftar")
+                df_counsel = fetch_counseling_logs()
+                if not df_counsel.empty and 'Kelas' in df_counsel.columns:
+                    c_history = df_counsel[df_counsel['Kelas'] == target_c]
+                    if not c_history.empty:
+                        st.dataframe(c_history.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Belum ada riwayat konseling untuk kelas ini.")
+                else:
+                    st.info("Belum ada data konseling tersimpan di database.")
+
+    # 4. KEPALA SEKOLAH (DASHBOARD MAKRO TINGKAT SEKOLAH)
     elif st.session_state.user_role == "Kepala Sekolah":
         st.title("🏛️ Dashboard Makro Kedisiplinan - Kepala Sekolah")
-        if st.button("🔄 Muat Data Makro Kedisiplinan Seluruh Kelas", type="primary"):
-            with st.spinner("Mengagregasi data risiko dari seluruh kelas..."):
+        st.caption("Monitoring Makro Seluruh Kelas & Evaluasi Risiko Sekolah")
+        
+        if st.button("🔄 Muat Data Eksekutif Makro Seluruh Kelas", type="primary"):
+            with st.spinner("Mengagregasi data dari seluruh kelas di sekolah..."):
                 df_late_all = fetch_lateness_logs()
                 df_flags_all = fetch_flags()
                 macro_summary = []
+                all_red_students = []
+                
                 for c in classes:
                     c_risk_df = calculate_class_risk_table(c, df_late_all, df_flags_all)
                     red = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA MERAH'])
                     yellow = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA KUNING'])
                     green = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA HIJAU'])
-                    macro_summary.append({'Kelas': c, 'Total Siswa': len(c_risk_df), '🔴 Zona Merah': red, '🟡 Zona Kuning': yellow, '🟢 Zona Hijau': green})
+                    
+                    # Store Red Zone Students for Executive Table
+                    red_df = c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA MERAH'].copy()
+                    if not red_df.empty:
+                        red_df['Kelas'] = c
+                        all_red_students.append(red_df)
+                        
+                    macro_summary.append({
+                        'Kelas': c, 
+                        'Total Siswa': len(c_risk_df), 
+                        '🔴 Zona Merah': red, 
+                        '🟡 Zona Kuning': yellow, 
+                        '🟢 Zona Hijau': green
+                    })
+                    
                 st.session_state["macro_kepsek"] = pd.DataFrame(macro_summary)
+                st.session_state["macro_red_students"] = pd.concat(all_red_students, ignore_index=True) if all_red_students else pd.DataFrame()
 
         if "macro_kepsek" in st.session_state:
             df_macro = st.session_state["macro_kepsek"]
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Siswa Zona Merah", df_macro['🔴 Zona Merah'].sum())
-            col2.metric("Total Siswa Zona Kuning", df_macro['🟡 Zona Kuning'].sum())
-            col3.metric("Total Siswa Zona Hijau", df_macro['🟢 Zona Hijau'].sum())
             
-            st.subheader("📊 Distribusi Risiko per Kelas")
-            st.dataframe(df_macro, use_container_width=True)
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("🔴 Total Siswa Zona Merah", df_macro['🔴 Zona Merah'].sum())
+            col2.metric("🟡 Total Siswa Zona Kuning", df_macro['🟡 Zona Kuning'].sum())
+            col3.metric("🟢 Total Siswa Zona Hijau", df_macro['🟢 Zona Hijau'].sum())
+            col4.metric("🏫 Total Kelas Terpantau", len(df_macro))
+            
+            st.write("---")
+            st.subheader("📊 Distribusi Risiko Kedisiplinan per Kelas")
+            st.dataframe(df_macro, use_container_width=True, hide_index=True)
             st.bar_chart(df_macro.set_index('Kelas')[['🔴 Zona Merah', '🟡 Zona Kuning', '🟢 Zona Hijau']])
+            
+            st.write("---")
+            st.subheader("⚠️ Daftar Prioritas Siswa Zona Merah (Perlu Atensi Kepsek & BK)")
+            if "macro_red_students" in st.session_state and not st.session_state["macro_red_students"].empty:
+                df_red = st.session_state["macro_red_students"]
+                cols_order = ['Kelas', 'Nama Siswa', 'Skor Poin', 'Alpa (Hari)', 'Terlambat (Menit)', 'Flag Negatif']
+                st.dataframe(df_red[cols_order].sort_values(by='Skor Poin', ascending=False), use_container_width=True, hide_index=True)
+            else:
+                st.success("🎉 Tidak ada siswa dalam Zona Merah di seluruh kelas!")
         else:
-            st.info("Klik tombol di atas untuk memuat laporan makro seluruh kelas.")
+            st.info("Klik tombol di atas untuk memuat laporan makro tingkat sekolah.")
 
-    # 5. ADMIN SYSTEM (MODUL UTAMA YANG DITINGKATKAN)
+    # 5. ADMIN SYSTEM (MANAGEMENT HUB)
     elif st.session_state.user_role in ["Admin", "Administrator System"]:
         st.title("🛠️ Pusat Pengaturan Administrator System")
         tab_pass, tab_master_all = st.tabs(["🔐 Kelola Pengguna (CRUD)", "👥 Kelola Data Master Siswa (CRUD & I/O)"])
