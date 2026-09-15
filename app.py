@@ -78,26 +78,29 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Database Google Sheets: {e}")
     st.stop()
 
-# --- 2. OPTIMIZED BATCH DATA FETCHING (SOLUSI QUOTA 429) ---
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_all_sheets_data():
-    """Mengambil SELURUH isi spreadsheet sekaligus dalam 1 batch untuk hemat kuota API"""
-    data_dict = {}
-    try:
-        worksheets = sh.worksheets()
-        for ws in worksheets:
-            data_dict[ws.title] = pd.DataFrame(ws.get_all_records())
-    except Exception as e:
-        st.warning(f"Terjadi batasan API sementara, mencoba memuat data ulang... ({e})")
-    return data_dict
+# --- 2. LAZY FETCHING DENGAN RETRY AUTOMATION ---
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_sheet_with_retry(sheet_name):
+    """Membaca 1 worksheet dengan proteksi kuota & retry otomatis"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            ws = sh.worksheet(sheet_name)
+            return pd.DataFrame(ws.get_all_records())
+        except WorksheetNotFound:
+            return pd.DataFrame()
+        except APIError as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))  # Penundaan bertahap 2s, 4s
+                continue
+            return pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
 
-def get_sheet_df(sheet_name):
-    all_data = fetch_all_sheets_data()
-    return all_data.get(sheet_name, pd.DataFrame())
-
-# --- 3. MANAGEMENT DATABASE MASTER NAMA ---
+# --- 3. MASTER SISWA & CONFIG ---
 def fetch_all_master_df():
-    df = get_sheet_df("MASTER_SISWA")
+    df = fetch_sheet_with_retry("MASTER_SISWA")
     if df.empty:
         df = pd.DataFrame(columns=classes)
         for c in classes:
@@ -113,9 +116,8 @@ def get_master_students(kelas):
         return [n for n in names if n not in ["", "None", "nan"]]
     return []
 
-# --- 4. CONFIG & USER MANAGEMENTS ---
 def fetch_config_passwords():
-    df = get_sheet_df("CONFIG")
+    df = fetch_sheet_with_retry("CONFIG")
     if not df.empty and 'Key' in df.columns and 'Password' in df.columns:
         return dict(zip(df['Key'], df['Password']))
     
@@ -123,9 +125,9 @@ def fetch_config_passwords():
     default_passwords = ['admin123', 'piket123', 'bk123', 'kepsek123'] + [f"{c.lower()}123" for c in classes]
     return dict(zip(keys, default_passwords))
 
-# --- 5. LOG KETERLAMBATAN, FLAGGING & KONSELING ---
+# --- 4. LOG KETERLAMBATAN, FLAGGING & KONSELING ---
 def fetch_lateness_logs():
-    return get_sheet_df("LOG_KETERLAMBATAN")
+    return fetch_sheet_with_retry("LOG_KETERLAMBATAN")
 
 def save_lateness_entry(tanggal, kelas, nama, menit, pencatat):
     try:
@@ -135,14 +137,14 @@ def save_lateness_entry(tanggal, kelas, nama, menit, pencatat):
             ws = sh.add_worksheet("LOG_KETERLAMBATAN", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'Kelas', 'Nama Siswa', 'Menit Terlambat', 'Pencatat'])
         ws.append_row([str(tanggal), kelas, nama, int(menit), pencatat])
-        fetch_all_sheets_data.clear()
+        fetch_sheet_with_retry.clear()
         return True
     except Exception as e:
         st.error(f"Gagal menyimpan keterlambatan: {e}")
         return False
 
 def fetch_flags():
-    return get_sheet_df("FLAGS_PERILAKU")
+    return fetch_sheet_with_retry("FLAGS_PERILAKU")
 
 def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
     dt = datetime.datetime.strptime(str(tanggal), "%Y-%m-%d").date() if isinstance(tanggal, str) else tanggal
@@ -161,13 +163,13 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
             ws = sh.add_worksheet("FLAGS_PERILAKU", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'TahunMinggu', 'Kelas', 'Nama Siswa', 'Tipe', 'Kategori', 'Catatan', 'Pencatat'])
         ws.append_row([str(dt), year_week, kelas, nama, tipe, kategori, catatan, pencatat])
-        fetch_all_sheets_data.clear()
+        fetch_sheet_with_retry.clear()
         return True, "✅ Flagging perilaku berhasil dicatat!"
     except Exception as e:
         return False, f"Gagal menyimpan flag: {e}"
 
 def fetch_counseling_logs():
-    return get_sheet_df("KONSELING_BK")
+    return fetch_sheet_with_retry("KONSELING_BK")
 
 def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, konselor):
     try:
@@ -179,16 +181,16 @@ def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, ko
         
         c_id = f"BK-{int(datetime.datetime.now().timestamp())}"
         ws.append_row([c_id, str(tanggal), kelas, nama, ringkasan, rekomendasi, status, konselor])
-        fetch_all_sheets_data.clear()
+        fetch_sheet_with_retry.clear()
         return True
     except Exception as e:
         st.error(f"Gagal menyimpan catatan konseling: {e}")
         return False
 
-# --- 6. DATA ABSENSI BULANAN IN-MEMORY ---
+# --- 5. DATA ABSENSI BULANAN ---
 def fetch_attendance_data_from_cache(kelas, month):
     sheet_name = f"{kelas}_{month}"
-    df_stored = get_sheet_df(sheet_name)
+    df_stored = fetch_sheet_with_retry(sheet_name)
     year = get_year_for_month(month)
     month_num = month_map[month]
     _, max_days = calendar.monthrange(year, month_num)
@@ -229,7 +231,7 @@ def generate_full_report(df):
     df_report['S'], df_report['I'], df_report['A'], df_report['Hadir'] = s_list, i_list, a_list, h_list
     return df_report
 
-# --- 7. RISK SCORING ENGINE (FAST IN-MEMORY) ---
+# --- 6. RISK SCORING ENGINE ---
 def calculate_risk_score(student_name, kelas, df_late=None, df_flags=None):
     total_alpa = 0
     for m in months:
@@ -285,7 +287,7 @@ def generate_ai_student_narrative(student_name, risk_data, flag_history):
         
     return narrative
 
-# --- 8. OTENTIKASI & USER INTERFACE ---
+# --- 7. OTENTIKASI & USER INTERFACE ---
 passwords = fetch_config_passwords()
 
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
