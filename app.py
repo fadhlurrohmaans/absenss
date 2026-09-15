@@ -467,11 +467,10 @@ if not st.session_state.logged_in:
     st.caption("GovTech Education Platform - Integrated Early Warning System")
     
     login_tab_wali, login_tab_staf = st.tabs(["🏫 Wali Kelas dan Perangkat Kelas", "🏢 Guru Piket, BK, Kepsek & Admin"])
-    
-    with login_tab_wali:
+with login_tab_wali:
         with st.form("form_login_wali"):
             st.subheader("Login Ruang Kelas")
-            role_wali = st.radio("Masuk Sebagai:", ["Sekretaris Kelas", "Wali Kelas", "Ketua Kelas"], horizontal=True)
+            role_wali = st.selectbox("Masuk Sebagai:", ["Sekretaris Kelas", "Wali Kelas", "Ketua Kelas"], key="sel_role_wali")
             target_class = st.selectbox("Pilih Kelas Anda:", classes, key="sel_wali_class")
             password_wali = st.text_input("Masukkan Password:", type="password", key="pass_wali")
             
@@ -489,8 +488,9 @@ if not st.session_state.logged_in:
                     st.session_state.assigned_class = target_class
                     st.rerun()
                 else:
-                    st.error("❌ Password Salah! Pastikan Anda menggunakan sandi yang benar sesuai peran.")                
-    with login_tab_staf:
+                    st.error("❌ Password Salah! Pastikan Anda menggunakan sandi yang benar sesuai peran.")    
+    
+with login_tab_staf:
         with st.form("form_login_staf"):
             st.subheader("Login Staf & Manajemen Sekolah")
             role_staf = st.selectbox("Pilih Peran / Akses Peran:", ["Guru Piket / Pelajaran", "Guru BK", "Kepala Sekolah", "Administrator System"], key="sel_staf_role")
