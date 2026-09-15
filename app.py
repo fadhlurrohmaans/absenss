@@ -83,6 +83,14 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Database Google Sheets: {e}")
     st.stop()
 
+# --- OPTIMASI UTAMA: CACHE NAMA WORKSHEET UNTUK MENCEGAH LATENCY API ---
+@st.cache_data(ttl=300, show_spinner=False)
+def get_existing_worksheet_names():
+    try:
+        return [ws.title for ws in sh.worksheets()]
+    except Exception:
+        return []
+
 # --- 2. LAZY FETCHING DENGAN CACHE & RETRY ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_sheet_with_retry(sheet_name):
@@ -147,7 +155,6 @@ def fetch_config_passwords():
     if not df.empty and 'Key' in df.columns and 'Password' in df.columns:
         return dict(zip(df['Key'].astype(str), df['Password'].astype(str)))
     
-    # PERUBAHAN: Menambahkan Key & Password Wali Kelas dan Sekretaris secara terpisah
     keys = ['Admin', 'Guru Piket', 'Guru BK', 'Kepala Sekolah'] + classes + [f"Wali{c}" for c in classes]
     default_passwords = ['admin123', 'piket123', 'bk123', 'kepsek123'] + \
                         [f"{c.lower()}123" for c in classes] + \
@@ -172,6 +179,7 @@ def save_lateness_entry(tanggal, kelas, nama, menit, pencatat):
         except WorksheetNotFound:
             ws = sh.add_worksheet("LOG_KETERLAMBATAN", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'Kelas', 'Nama Siswa', 'Menit Terlambat', 'Pencatat'])
+            get_existing_worksheet_names.clear()
         ws.append_row([str(tanggal), kelas, nama, int(menit), pencatat])
         fetch_sheet_with_retry.clear("LOG_KETERLAMBATAN")
         return True
@@ -196,6 +204,7 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
         except WorksheetNotFound:
             ws = sh.add_worksheet("FLAGS_PERILAKU", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'TahunMinggu', 'Kelas', 'Nama Siswa', 'Tipe', 'Kategori', 'Catatan', 'Pencatat'])
+            get_existing_worksheet_names.clear()
         ws.append_row([str(dt), year_week, kelas, nama, tipe, kategori, catatan, pencatat])
         fetch_sheet_with_retry.clear("FLAGS_PERILAKU")
         return True, "✅ Flagging perilaku berhasil dicatat!"
@@ -209,6 +218,7 @@ def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, ko
         except WorksheetNotFound:
             ws = sh.add_worksheet("KONSELING_BK", rows="500", cols="10")
             ws.append_row(['ID', 'Tanggal', 'Kelas', 'Nama Siswa', 'Ringkasan', 'Rekomendasi', 'Status', 'Konselor'])
+            get_existing_worksheet_names.clear()
         c_id = f"BK-{int(datetime.datetime.now().timestamp())}"
         ws.append_row([c_id, str(tanggal), kelas, nama, ringkasan, rekomendasi, status, konselor])
         fetch_sheet_with_retry.clear("KONSELING_BK")
@@ -218,7 +228,11 @@ def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, ko
 # --- 5. DATA ABSENSI BULANAN & GRID EDITOR ---
 def fetch_attendance_data_from_cache(kelas, month):
     sheet_name = f"{kelas}_{month}"
-    df_stored = fetch_sheet_with_retry(sheet_name)
+    existing_sheets = get_existing_worksheet_names()
+    
+    # Langsung kembalikan template kosong jika sheet belum pernah dibuat (Mencegah API Request lambat)
+    df_stored = fetch_sheet_with_retry(sheet_name) if sheet_name in existing_sheets else pd.DataFrame()
+    
     year = get_year_for_month(month)
     month_num = month_map[month]
     _, max_days = calendar.monthrange(year, month_num)
@@ -247,12 +261,15 @@ def fetch_attendance_data_from_cache(kelas, month):
 def save_attendance_data(kelas, month, df):
     sheet_name = f"{kelas}_{month}"
     try: ws = sh.worksheet(sheet_name)
-    except Exception: ws = sh.add_worksheet(title=sheet_name, rows="100", cols="40")
+    except Exception: 
+        ws = sh.add_worksheet(title=sheet_name, rows="100", cols="40")
+        get_existing_worksheet_names.clear()
         
     ws.clear()
     df = df.fillna('').astype(str)
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_sheet_with_retry.clear(sheet_name)
+    get_existing_worksheet_names.clear()
 
 def get_calendar_config(selected_month):
     year = get_year_for_month(selected_month)
@@ -315,8 +332,12 @@ def generate_full_report(df):
 def calculate_period_recap(kelas, target_months):
     master_names = get_master_students(kelas)
     recap = {name: {'S': 0, 'I': 0, 'A': 0, 'Hadir': 0} for name in master_names}
+    existing_sheets = get_existing_worksheet_names()
     
     for m in target_months:
+        sheet_name = f"{kelas}_{m}"
+        if sheet_name not in existing_sheets:
+            continue
         df_m = fetch_attendance_data_from_cache(kelas, m)
         rep_m = generate_full_report(df_m)
         for _, row in rep_m.iterrows():
@@ -342,10 +363,17 @@ def calculate_period_recap(kelas, target_months):
     return pd.DataFrame(rows)
 
 # --- 6. OPTIMIZED BATCH RISK SCORING ENGINE ---
-def get_class_alpa_summary(kelas):
+def get_class_alpa_summary(kelas, existing_sheets=None):
     students = get_master_students(kelas)
     alpa_map = {s: 0 for s in students}
+    if existing_sheets is None:
+        existing_sheets = get_existing_worksheet_names()
+        
     for m in months:
+        sheet_name = f"{kelas}_{m}"
+        if sheet_name not in existing_sheets:
+            continue  # MELEWATI KELAS/BULAN YANG BELUM ADA DI GOOGLE SHEETS
+            
         df_m = fetch_attendance_data_from_cache(kelas, m)
         rep = generate_full_report(df_m)
         for _, row in rep.iterrows():
@@ -354,9 +382,9 @@ def get_class_alpa_summary(kelas):
                 alpa_map[nama] += int(row['A'])
     return alpa_map
 
-def calculate_class_risk_table(kelas, df_late_all=None, df_flags_all=None):
+def calculate_class_risk_table(kelas, df_late_all=None, df_flags_all=None, existing_sheets=None):
     students = get_master_students(kelas)
-    alpa_map = get_class_alpa_summary(kelas)
+    alpa_map = get_class_alpa_summary(kelas, existing_sheets)
     if df_late_all is None: df_late_all = fetch_lateness_logs()
     if df_flags_all is None: df_flags_all = fetch_flags()
     
@@ -418,7 +446,6 @@ if not st.session_state.logged_in:
     
     login_tab_wali, login_tab_staf = st.tabs(["🏫 Sekretaris / Wali Kelas", "🏢 Guru Piket, BK, Kepsek & Admin"])
     
-    # PERUBAHAN LOGIN: Memisahkan peran Sekretaris & Wali Kelas dengan opsi radio button
     with login_tab_wali:
         with st.form("form_login_wali"):
             st.subheader("Login Ruang Kelas")
@@ -428,8 +455,6 @@ if not st.session_state.logged_in:
             
             if st.form_submit_button("🔑 Masuk Ke Ruang Kelas", type="primary"):
                 passwords = fetch_config_passwords()
-                
-                # Cek peran untuk menentukan key yang dicocokkan
                 login_key = target_class if role_wali == "Sekretaris Kelas" else f"Wali{target_class}"
                 
                 if password_wali == passwords.get(login_key):
@@ -459,12 +484,11 @@ if not st.session_state.logged_in:
                     st.error("❌ Password Akun Salah!")
 
 else:
-    # 1. SEKRETARIS KELAS & WALI KELAS (DIPISAH BERDASARKAN HAK AKSES TAB)
+    # 1. SEKRETARIS KELAS & WALI KELAS
     if st.session_state.user_role in ["Sekretaris Kelas", "Wali Kelas"]:
         my_class = st.session_state.assigned_class
         st.title(f"🏫 Ruang Kerja {st.session_state.user_role} {my_class}")
         
-        # PERUBAHAN: Menentukan tab yang terlihat berdasarkan hak akses
         if st.session_state.user_role == "Wali Kelas":
             tabs = st.tabs([
                 "📝 Isi Absensi Bulanan (Grid)", 
@@ -476,7 +500,6 @@ else:
             ])
             tab_absen, tab_ganjil, tab_genap, tab_rekap, tab_risk, tab_nama = tabs
         else:
-            # Sekretaris Kelas hanya menerima 1 Tab
             tabs = st.tabs(["📝 Isi Absensi Bulanan (Grid)"])
             tab_absen = tabs[0]
         
@@ -521,7 +544,6 @@ else:
             full_report = generate_full_report(edited_df)
             st.dataframe(full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '% Hadir', '% Izin', '% Alpha', '% Sakit']], use_container_width=True)
 
-        # Tab ekstra hanya dimuat dan ditampilkan untuk Wali Kelas
         if st.session_state.user_role == "Wali Kelas":
             with tab_ganjil:
                 st.subheader(f"🍂 Rekapitulasi Semester Ganjil (Juli - Desember) - Kelas {my_class}")
@@ -638,7 +660,7 @@ else:
                         if success: st.success(msg)
                         else: st.warning(msg)
 
-    # 3. GURU BK (DASHBOARD EKSEKUTIF BK TERPRODUKSI)
+    # 3. GURU BK
     elif st.session_state.user_role == "Guru BK":
         st.title("📊 Dashboard Eksekutif Bimbingan Konseling (BK)")
         target_c = st.selectbox("🎯 Pilih Kelas Pantauan Utama BK:", classes, key="bk_target_class")
@@ -669,7 +691,8 @@ else:
             st.subheader(f"🛡️ Sistem Risk Scoring & Tren Kedisiplinan - Kelas {target_c}")
             if st.button("🔄 Kalkulasi Matriks Risiko & Tren Terbaru", type="primary", key="btn_bk_calc_risk"):
                 with st.spinner("Mengkalkulasi tingkat risiko kedisiplinan & tren..."):
-                    st.session_state[f"risk_bk_{target_c}"] = calculate_class_risk_table(target_c)
+                    existing_sheets = get_existing_worksheet_names()
+                    st.session_state[f"risk_bk_{target_c}"] = calculate_class_risk_table(target_c, existing_sheets=existing_sheets)
             if f"risk_bk_{target_c}" in st.session_state:
                 df_risk = st.session_state[f"risk_bk_{target_c}"]
                 if not df_risk.empty:
@@ -723,16 +746,20 @@ else:
                     else: st.info("Belum ada riwayat konseling untuk kelas ini.")
                 else: st.info("Belum ada data konseling tersimpan di database.")
 
-    # 4. KEPALA SEKOLAH (DASHBOARD MAKRO TINGKAT SEKOLAH)
+    # 4. KEPALA SEKOLAH (DIOPTIMASI UNTUK EKSEKUSI CEPAT)
     elif st.session_state.user_role == "Kepala Sekolah":
         st.title("🏛️ Dashboard Makro Kedisiplinan - Kepala Sekolah")
         if st.button("🔄 Muat Data Eksekutif Makro Seluruh Kelas", type="primary"):
             with st.spinner("Mengagregasi data dari seluruh kelas di sekolah..."):
                 df_late_all = fetch_lateness_logs()
                 df_flags_all = fetch_flags()
+                
+                # Mengambil daftar sheet hanya 1 kali
+                existing_sheets = get_existing_worksheet_names()
+                
                 macro_summary, all_red_students = [], []
                 for c in classes:
-                    c_risk_df = calculate_class_risk_table(c, df_late_all, df_flags_all)
+                    c_risk_df = calculate_class_risk_table(c, df_late_all, df_flags_all, existing_sheets)
                     red = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA MERAH'])
                     yellow = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA KUNING'])
                     green = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA HIJAU'])
@@ -741,6 +768,7 @@ else:
                         red_df['Kelas'] = c
                         all_red_students.append(red_df)
                     macro_summary.append({'Kelas': c, 'Total Siswa': len(c_risk_df), '🔴 Zona Merah': red, '🟡 Zona Kuning': yellow, '🟢 Zona Hijau': green})
+                
                 st.session_state["macro_kepsek"] = pd.DataFrame(macro_summary)
                 st.session_state["macro_red_students"] = pd.concat(all_red_students, ignore_index=True) if all_red_students else pd.DataFrame()
 
@@ -764,7 +792,7 @@ else:
             else: st.success("🎉 Tidak ada siswa dalam Zona Merah di seluruh kelas!")
         else: st.info("Klik tombol di atas untuk memuat laporan makro tingkat sekolah.")
 
-    # 5. ADMIN SYSTEM (MANAGEMENT HUB)
+    # 5. ADMIN SYSTEM
     elif st.session_state.user_role in ["Admin", "Administrator System"]:
         st.title("🛠️ Pusat Pengaturan Administrator System")
         tab_pass, tab_master_all = st.tabs(["🔐 Kelola Pengguna (CRUD)", "👥 Kelola Data Master Siswa (CRUD & I/O)"])
