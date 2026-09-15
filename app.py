@@ -631,7 +631,7 @@ else:
                 f_student = st.selectbox("Pilih Siswa:", f_students) if f_students else None
                 f_type = st.radio("Jenis Flagging:", ["POSITIF", "NEGATIF"], horizontal=True)
                 f_category = st.selectbox("Kategori Perilaku:", ["Ketertiban / Kerapihan", "Kedisiplinan Jam Pelajaran", "Prestasi / Kerjasama", "Pelanggaran Tata Tertib", "Bullying / Perkelahian", "Lainnya"])
-                f_catatan = st.text_area("Deskripsi Catatan Guru:")
+                f_catatan = st.text_area("Deskripsi Catatan :")
                 if st.form_submit_button("🚩 Kirim Flagging Perilaku"):
                     if f_student:
                         success, msg = save_flag_entry(datetime.date.today(), f_class, f_student, f_type, f_category, f_catatan, "Guru Piket")
