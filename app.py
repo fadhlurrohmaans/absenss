@@ -533,51 +533,53 @@ else:
             tab_flag = tabs[0]
         
         # Eksekusi Tab Absensi HANYA untuk Sekretaris dan Wali Kelas
+        # Eksekusi Tab Absensi HANYA untuk Sekretaris dan Wali Kelas
         if st.session_state.user_role in ["Sekretaris Kelas", "Wali Kelas"]:
-                # ... (Biarkan semua kode isi `with tab_absen:` persis seperti aslinya di sini) ...
-        with tab_absen:
-            selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
-            col_config, disabled_cols, monthly_holidays = get_calendar_config(selected_month)
-            
-            if monthly_holidays:
-                holiday_items = "\n".join([f"• **Tanggal {day} ({day_name})**: {reason}" for day, day_name, reason in monthly_holidays])
-                st.info(f"🔴 **Keterangan Hari Libur Nasional ({selected_month}):**\n\n{holiday_items}")
-            else:
-                st.caption(f"ℹ️ Bulan {selected_month} tidak memiliki Tanggal Merah Hari Libur Nasional.")
-            
-            session_key = f"df_{my_class}_{selected_month}"
-            if session_key not in st.session_state:
-                st.session_state[session_key] = fetch_attendance_data_from_cache(my_class, selected_month)
-            
-            current_data = st.session_state[session_key]
-            
-            st.subheader("📝 Papan Lembar Absensi Digital")
-            st.caption("Petunjuk: Isi H (Hadir), S (Sakit), I (Izin), A (Alpha). Kolom Nama, Weekend, & Tanggal Merah dikunci otomatis.")
-            
-            edited_df = st.data_editor(
-                current_data,
-                num_rows="fixed",
-                use_container_width=True,
-                column_config=col_config,
-                disabled=["Nama Siswa"] + disabled_cols,
-                key=f"editor_{session_key}"
-            )
-            
-            st.session_state[session_key] = edited_df
-            
-            if st.button("💾 Simpan Absensi Bulan Ini", type="primary"):
-                with st.spinner("Mengunci data absensi ke Cloud Google Sheets..."):
-                    save_attendance_data(my_class, selected_month, edited_df)
-                st.success(f"🎉 Absensi Kelas {my_class} bulan {selected_month} berhasil disimpan!")
-                st.rerun()
+            with tab_absen:
+                selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
+                col_config, disabled_cols, monthly_holidays = get_calendar_config(selected_month)
                 
-            st.write("---")
-            st.subheader("📋 Ringkasan Kehadiran Bulan Ini")
-            full_report = generate_full_report(edited_df)
-            st.dataframe(full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '% Hadir', '% Izin', '% Alpha', '% Sakit']], use_container_width=True)
+                if monthly_holidays:
+                    holiday_items = "\n".join([f"• **Tanggal {day} ({day_name})**: {reason}" for day, day_name, reason in monthly_holidays])
+                    st.info(f"🔴 **Keterangan Hari Libur Nasional ({selected_month}):**\n\n{holiday_items}")
+                else:
+                    st.caption(f"ℹ️ Bulan {selected_month} tidak memiliki Tanggal Merah Hari Libur Nasional.")
+                
+                session_key = f"df_{my_class}_{selected_month}"
+                if session_key not in st.session_state:
+                    st.session_state[session_key] = fetch_attendance_data_from_cache(my_class, selected_month)
+                
+                current_data = st.session_state[session_key]
+                
+                st.subheader("📝 Papan Lembar Absensi Digital")
+                st.caption("Petunjuk: Isi H (Hadir), S (Sakit), I (Izin), A (Alpha). Kolom Nama, Weekend, & Tanggal Merah dikunci otomatis.")
+                
+                edited_df = st.data_editor(
+                    current_data,
+                    num_rows="fixed",
+                    use_container_width=True,
+                    column_config=col_config,
+                    disabled=["Nama Siswa"] + disabled_cols,
+                    key=f"editor_{session_key}"
+                )
+                
+                st.session_state[session_key] = edited_df
+                
+                if st.button("💾 Simpan Absensi Bulan Ini", type="primary"):
+                    with st.spinner("Mengunci data absensi ke Cloud Google Sheets..."):
+                        save_attendance_data(my_class, selected_month, edited_df)
+                    st.success(f"🎉 Absensi Kelas {my_class} bulan {selected_month} berhasil disimpan!")
+                    st.rerun()
+                    
+                st.write("---")
+                st.subheader("📋 Ringkasan Kehadiran Bulan Ini")
+                full_report = generate_full_report(edited_df)
+                st.dataframe(full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '% Hadir', '% Izin', '% Alpha', '% Sakit']], use_container_width=True)
 
+        # Bagian ini sejajar kembali dengan 'if' di atasnya
         if st.session_state.user_role == "Wali Kelas":
             with tab_ganjil:
+                # ... dan seterusnya ...
                 st.subheader(f"🍂 Rekapitulasi Semester Ganjil (Juli - Desember) - Kelas {my_class}")
                 if st.button("🔄 Muat / Perbarui Rekap Semester Ganjil", type="primary", key="btn_ganjil_sk"):
                     with st.spinner("Kalkulasi Semester Ganjil..."):
