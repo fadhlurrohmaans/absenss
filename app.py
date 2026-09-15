@@ -83,10 +83,10 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Database Google Sheets: {e}")
     st.stop()
 
-# --- 2. LAZY FETCHING DENGAN CACHE & RETRY AUTOMATION ---
-@st.cache_data(ttl=3600, show_spinner=False)
+# --- 2. LAZY FETCHING DENGAN CACHE & BACKOFF RETRY ---
+@st.cache_data(ttl=1800, show_spinner=False)
 def fetch_sheet_with_retry(sheet_name):
-    max_retries = 3
+    max_retries = 5
     for attempt in range(max_retries):
         try:
             ws = sh.worksheet(sheet_name)
@@ -95,7 +95,7 @@ def fetch_sheet_with_retry(sheet_name):
             return pd.DataFrame()
         except APIError as e:
             if "429" in str(e) and attempt < max_retries - 1:
-                time.sleep(2 * (attempt + 1))
+                time.sleep(3 * (attempt + 1))
                 continue
             return pd.DataFrame()
         except Exception:
@@ -103,6 +103,7 @@ def fetch_sheet_with_retry(sheet_name):
     return pd.DataFrame()
 
 # --- 3. MASTER SISWA & CONFIG ---
+@st.cache_data(ttl=1800, show_spinner=False)
 def fetch_all_master_df():
     df = fetch_sheet_with_retry("MASTER_SISWA")
     if df.empty:
@@ -129,9 +130,10 @@ def save_master_students(kelas, name_list):
     ws = sh.worksheet("MASTER_SISWA")
     ws.clear()
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
-    fetch_sheet_with_retry.clear()
+    fetch_all_master_df.clear()
+    fetch_sheet_with_retry.clear("MASTER_SISWA")
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def fetch_config_passwords():
     df = fetch_sheet_with_retry("CONFIG")
     if not df.empty and 'Key' in df.columns and 'Password' in df.columns:
@@ -147,7 +149,7 @@ def save_config_passwords(password_dict):
     df = pd.DataFrame(list(password_dict.items()), columns=['Key', 'Password'])
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_config_passwords.clear()
-    fetch_sheet_with_retry.clear()
+    fetch_sheet_with_retry.clear("CONFIG")
 
 # --- 4. LOG KETERLAMBATAN, FLAGGING & KONSELING ---
 def fetch_lateness_logs():
@@ -161,7 +163,7 @@ def save_lateness_entry(tanggal, kelas, nama, menit, pencatat):
             ws = sh.add_worksheet("LOG_KETERLAMBATAN", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'Kelas', 'Nama Siswa', 'Menit Terlambat', 'Pencatat'])
         ws.append_row([str(tanggal), kelas, nama, int(menit), pencatat])
-        fetch_sheet_with_retry.clear()
+        fetch_sheet_with_retry.clear("LOG_KETERLAMBATAN")
         return True
     except Exception as e:
         st.error(f"Gagal menyimpan keterlambatan: {e}")
@@ -187,7 +189,7 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
             ws = sh.add_worksheet("FLAGS_PERILAKU", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'TahunMinggu', 'Kelas', 'Nama Siswa', 'Tipe', 'Kategori', 'Catatan', 'Pencatat'])
         ws.append_row([str(dt), year_week, kelas, nama, tipe, kategori, catatan, pencatat])
-        fetch_sheet_with_retry.clear()
+        fetch_sheet_with_retry.clear("FLAGS_PERILAKU")
         return True, "✅ Flagging perilaku berhasil dicatat!"
     except Exception as e:
         return False, f"Gagal menyimpan flag: {e}"
@@ -205,7 +207,7 @@ def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, ko
         
         c_id = f"BK-{int(datetime.datetime.now().timestamp())}"
         ws.append_row([c_id, str(tanggal), kelas, nama, ringkasan, rekomendasi, status, konselor])
-        fetch_sheet_with_retry.clear()
+        fetch_sheet_with_retry.clear("KONSELING_BK")
         return True
     except Exception as e:
         st.error(f"Gagal menyimpan catatan konseling: {e}")
@@ -252,7 +254,7 @@ def save_attendance_data(kelas, month, df):
     df = df.astype(str)
     data_to_write = [df.columns.values.tolist()] + df.values.tolist()
     ws.update(range_name='A1', values=data_to_write)
-    fetch_sheet_with_retry.clear()
+    fetch_sheet_with_retry.clear(sheet_name)
 
 def get_calendar_config(selected_month):
     year = get_year_for_month(selected_month)
