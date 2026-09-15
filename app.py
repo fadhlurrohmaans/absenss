@@ -5,8 +5,7 @@ from google.oauth2.service_account import Credentials
 from gspread.exceptions import WorksheetNotFound, APIError
 import datetime
 import calendar
-import io
-import base64
+import time
 
 # --- 0. KONFIGURASI KALENDER & LIBUR NASIONAL ---
 try:
@@ -42,21 +41,15 @@ def is_day_off(dt):
         return True, manual_holidays[dt]
     return False, ""
 
-# Konfigurasi Halaman Streamlit
 st.set_page_config(layout="wide", page_title="Sistem Early Warning Kedisiplinan Siswa - GovTech", page_icon="🏫")
 
-# CSS Custom UI Enterprise
 st.markdown("""
     <style>
     div[data-testid="stDataFrame"] { -webkit-overflow-scrolling: touch; }
     .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; }
-    .badge-red { background-color: #ff4d4f; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; }
-    .badge-yellow { background-color: #faad14; color: black; padding: 4px 8px; border-radius: 6px; font-weight: bold; }
-    .badge-green { background-color: #52c41a; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# Parameter Utamanya
 classes = [f"{grade}{letter}" for grade in [7, 8, 9] for letter in ['A', 'B', 'C', 'D', 'E', 'F']]
 months = ['JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER', 'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI']
 date_cols = [f"Tgl {i}" for i in range(1, 32)]
@@ -85,30 +78,33 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Database Google Sheets: {e}")
     st.stop()
 
-# --- 2. MANAGEMENT DATABASE MASTER NAMA ---
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_all_master_df():
+# --- 2. OPTIMIZED BATCH DATA FETCHING (SOLUSI QUOTA 429) ---
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_all_sheets_data():
+    """Mengambil SELURUH isi spreadsheet sekaligus dalam 1 batch untuk hemat kuota API"""
+    data_dict = {}
     try:
-        ws = sh.worksheet("MASTER_SISWA")
-        data = ws.get_all_values()
-        if not data: raise WorksheetNotFound
-        df = pd.DataFrame(data[1:], columns=data[0])
+        worksheets = sh.worksheets()
+        for ws in worksheets:
+            data_dict[ws.title] = pd.DataFrame(ws.get_all_records())
+    except Exception as e:
+        st.warning(f"Terjadi batasan API sementara, mencoba memuat data ulang... ({e})")
+    return data_dict
+
+def get_sheet_df(sheet_name):
+    all_data = fetch_all_sheets_data()
+    return all_data.get(sheet_name, pd.DataFrame())
+
+# --- 3. MANAGEMENT DATABASE MASTER NAMA ---
+def fetch_all_master_df():
+    df = get_sheet_df("MASTER_SISWA")
+    if df.empty:
+        df = pd.DataFrame(columns=classes)
         for c in classes:
-            if c not in df.columns: df[c] = ""
-        return df
-    except (WorksheetNotFound, APIError):
-        try:
-            ws = sh.add_worksheet(title="MASTER_SISWA", rows="150", cols="30")
-            df = pd.DataFrame(columns=classes)
-            for c in classes:
-                df[c] = initial_students + [""] * (150 - len(initial_students))
-            ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
-            return df
-        except Exception:
-            df = pd.DataFrame(columns=classes)
-            for c in classes:
-                df[c] = initial_students + [""] * (150 - len(initial_students))
-            return df
+            df[c] = initial_students + [""] * (150 - len(initial_students))
+    for c in classes:
+        if c not in df.columns: df[c] = ""
+    return df
 
 def get_master_students(kelas):
     df = fetch_all_master_df()
@@ -117,36 +113,19 @@ def get_master_students(kelas):
         return [n for n in names if n not in ["", "None", "nan"]]
     return []
 
-def save_master_students(kelas, name_list):
-    df = fetch_all_master_df()
-    name_list = [str(n).strip() for n in name_list if str(n).strip() != ""]
-    df[kelas] = pd.Series(name_list)
-    df = df.fillna("")
-    ws = sh.worksheet("MASTER_SISWA")
-    ws.clear()
-    ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
-    fetch_all_master_df.clear()
-
-# --- 3. CONFIG & USER MANAGEMENTS ---
-@st.cache_data(ttl=3600, show_spinner=False)
+# --- 4. CONFIG & USER MANAGEMENTS ---
 def fetch_config_passwords():
-    try:
-        ws = sh.worksheet("CONFIG")
-        data = ws.get_all_records()
-        return dict(zip(pd.DataFrame(data)['Key'], pd.DataFrame(data)['Password']))
-    except Exception:
-        keys = ['Admin', 'Guru Piket', 'Guru BK', 'Kepala Sekolah'] + classes
-        default_passwords = ['admin123', 'piket123', 'bk123', 'kepsek123'] + [f"{c.lower()}123" for c in classes]
-        return dict(zip(keys, default_passwords))
+    df = get_sheet_df("CONFIG")
+    if not df.empty and 'Key' in df.columns and 'Password' in df.columns:
+        return dict(zip(df['Key'], df['Password']))
+    
+    keys = ['Admin', 'Guru Piket', 'Guru BK', 'Kepala Sekolah'] + classes
+    default_passwords = ['admin123', 'piket123', 'bk123', 'kepsek123'] + [f"{c.lower()}123" for c in classes]
+    return dict(zip(keys, default_passwords))
 
-# --- 4. LOG KETERLAMBATAN, FLAGGING & KONSELING (OPTIMIZED WITH CACHE) ---
-@st.cache_data(ttl=300, show_spinner=False)
+# --- 5. LOG KETERLAMBATAN, FLAGGING & KONSELING ---
 def fetch_lateness_logs():
-    try:
-        ws = sh.worksheet("LOG_KETERLAMBATAN")
-        return pd.DataFrame(ws.get_all_records())
-    except Exception:
-        return pd.DataFrame(columns=['Tanggal', 'Kelas', 'Nama Siswa', 'Menit Terlambat', 'Pencatat'])
+    return get_sheet_df("LOG_KETERLAMBATAN")
 
 def save_lateness_entry(tanggal, kelas, nama, menit, pencatat):
     try:
@@ -156,29 +135,24 @@ def save_lateness_entry(tanggal, kelas, nama, menit, pencatat):
             ws = sh.add_worksheet("LOG_KETERLAMBATAN", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'Kelas', 'Nama Siswa', 'Menit Terlambat', 'Pencatat'])
         ws.append_row([str(tanggal), kelas, nama, int(menit), pencatat])
-        fetch_lateness_logs.clear()
+        fetch_all_sheets_data.clear()
         return True
     except Exception as e:
         st.error(f"Gagal menyimpan keterlambatan: {e}")
         return False
 
-@st.cache_data(ttl=300, show_spinner=False)
 def fetch_flags():
-    try:
-        ws = sh.worksheet("FLAGS_PERILAKU")
-        return pd.DataFrame(ws.get_all_records())
-    except Exception:
-        return pd.DataFrame(columns=['Tanggal', 'TahunMinggu', 'Kelas', 'Nama Siswa', 'Tipe', 'Kategori', 'Catatan', 'Pencatat'])
+    return get_sheet_df("FLAGS_PERILAKU")
 
 def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
     dt = datetime.datetime.strptime(str(tanggal), "%Y-%m-%d").date() if isinstance(tanggal, str) else tanggal
     year_week = f"{dt.year}-{dt.isocalendar()[1]}"
     
     df_flags = fetch_flags()
-    if not df_flags.empty:
+    if not df_flags.empty and 'Nama Siswa' in df_flags.columns and 'TahunMinggu' in df_flags.columns:
         existing = df_flags[(df_flags['Nama Siswa'] == nama) & (df_flags['TahunMinggu'] == year_week)]
         if len(existing) > 0:
-            return False, f"⚠️ Siswa '{nama}' sudah diberikan flagging pada minggu ini ({year_week}). Batas maksimal 1x/minggu!"
+            return False, f"⚠️ Siswa '{nama}' sudah diberikan flagging pada minggu ini ({year_week})."
 
     try:
         try:
@@ -187,18 +161,13 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
             ws = sh.add_worksheet("FLAGS_PERILAKU", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'TahunMinggu', 'Kelas', 'Nama Siswa', 'Tipe', 'Kategori', 'Catatan', 'Pencatat'])
         ws.append_row([str(dt), year_week, kelas, nama, tipe, kategori, catatan, pencatat])
-        fetch_flags.clear()
+        fetch_all_sheets_data.clear()
         return True, "✅ Flagging perilaku berhasil dicatat!"
     except Exception as e:
         return False, f"Gagal menyimpan flag: {e}"
 
-@st.cache_data(ttl=300, show_spinner=False)
 def fetch_counseling_logs():
-    try:
-        ws = sh.worksheet("KONSELING_BK")
-        return pd.DataFrame(ws.get_all_records())
-    except Exception:
-        return pd.DataFrame(columns=['ID', 'Tanggal', 'Kelas', 'Nama Siswa', 'Ringkasan', 'Rekomendasi', 'Status', 'Konselor'])
+    return get_sheet_df("KONSELING_BK")
 
 def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, konselor):
     try:
@@ -210,27 +179,21 @@ def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, ko
         
         c_id = f"BK-{int(datetime.datetime.now().timestamp())}"
         ws.append_row([c_id, str(tanggal), kelas, nama, ringkasan, rekomendasi, status, konselor])
-        fetch_counseling_logs.clear()
+        fetch_all_sheets_data.clear()
         return True
     except Exception as e:
         st.error(f"Gagal menyimpan catatan konseling: {e}")
         return False
 
-# --- 5. DATA ABSENSI BULANAN ---
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_attendance_data_from_gsheets(kelas, month):
+# --- 6. DATA ABSENSI BULANAN IN-MEMORY ---
+def fetch_attendance_data_from_cache(kelas, month):
     sheet_name = f"{kelas}_{month}"
+    df_stored = get_sheet_df(sheet_name)
     year = get_year_for_month(month)
     month_num = month_map[month]
     _, max_days = calendar.monthrange(year, month_num)
     master_names = get_master_students(kelas) or ["(Siswa Belum Diisi)"]
     
-    try:
-        ws = sh.worksheet(sheet_name)
-        df_stored = pd.DataFrame(ws.get_all_records())
-    except Exception:
-        df_stored = pd.DataFrame(columns=['Nama Siswa'] + date_cols)
-        
     df_new = pd.DataFrame(columns=['Nama Siswa'] + date_cols)
     df_new['Nama Siswa'] = master_names
     
@@ -243,23 +206,13 @@ def fetch_attendance_data_from_gsheets(kelas, month):
             is_off, _ = is_day_off(dt)
             col_vals = []
             for idx in range(len(master_names)):
-                if idx < len(df_stored) and col in df_stored.columns:
+                if not df_stored.empty and idx < len(df_stored) and col in df_stored.columns:
                     val = str(df_stored.loc[idx, col]).strip()
                     col_vals.append('L' if (is_off and val in ['', 'None', 'nan', '-']) else val)
                 else:
                     col_vals.append('L' if is_off else '')
             df_new[col] = col_vals
     return df_new
-
-def save_attendance_data(kelas, month, df):
-    sheet_name = f"{kelas}_{month}"
-    try:
-        ws = sh.worksheet(sheet_name)
-    except Exception:
-        ws = sh.add_worksheet(title=sheet_name, rows="100", cols="40")
-    ws.clear()
-    ws.update(range_name='A1', values=[df.fillna('').astype(str).columns.values.tolist()] + df.fillna('').astype(str).values.tolist())
-    fetch_attendance_data_from_gsheets.clear()
 
 def generate_full_report(df):
     df_report = df.copy()
@@ -276,58 +229,42 @@ def generate_full_report(df):
     df_report['S'], df_report['I'], df_report['A'], df_report['Hadir'] = s_list, i_list, a_list, h_list
     return df_report
 
-# --- 6. ENGINE RISK SCORING & ZONASIKAN (BATCH OPTIMIZED) ---
+# --- 7. RISK SCORING ENGINE (FAST IN-MEMORY) ---
 def calculate_risk_score(student_name, kelas, df_late=None, df_flags=None):
     total_alpa = 0
     for m in months:
-        df_m = fetch_attendance_data_from_gsheets(kelas, m)
+        df_m = fetch_attendance_data_from_cache(kelas, m)
         rep = generate_full_report(df_m)
         r = rep[rep['Nama Siswa'] == student_name]
         if not r.empty:
             total_alpa += int(r.iloc[0]['A'])
             
-    if df_late is None:
-        df_late = fetch_lateness_logs()
-        
+    if df_late is None: df_late = fetch_lateness_logs()
     total_late_min = 0
-    if not df_late.empty:
+    if not df_late.empty and 'Nama Siswa' in df_late.columns and 'Kelas' in df_late.columns:
         s_late = df_late[(df_late['Nama Siswa'] == student_name) & (df_late['Kelas'] == kelas)]
         total_late_min = s_late['Menit Terlambat'].astype(int).sum() if not s_late.empty else 0
         
-    if df_flags is None:
-        df_flags = fetch_flags()
-        
+    if df_flags is None: df_flags = fetch_flags()
     neg_flags, pos_flags = 0, 0
-    if not df_flags.empty:
+    if not df_flags.empty and 'Nama Siswa' in df_flags.columns and 'Kelas' in df_flags.columns:
         s_flags = df_flags[(df_flags['Nama Siswa'] == student_name) & (df_flags['Kelas'] == kelas)]
         if not s_flags.empty:
             neg_flags = len(s_flags[s_flags['Tipe'] == 'NEGATIF'])
             pos_flags = len(s_flags[s_flags['Tipe'] == 'POSITIF'])
             
-    score = (total_alpa * 15) + (total_late_min // 5) + (neg_flags * 10) - (pos_flags * 5)
-    score = max(0, score)
+    score = max(0, (total_alpa * 15) + (total_late_min // 5) + (neg_flags * 10) - (pos_flags * 5))
     
-    if score <= 20:
-        zone = "ZONA HIJAU"
-        badge = "🟢 Hijau (Aman)"
-    elif score <= 50:
-        zone = "ZONA KUNING"
-        badge = "🟡 Kuning (Waspada)"
-    else:
-        zone = "ZONA MERAH"
-        badge = "🔴 Merah (Kritis/Bahaya)"
+    if score <= 20: zone, badge = "ZONA HIJAU", "🟢 Hijau (Aman)"
+    elif score <= 50: zone, badge = "ZONA KUNING", "🟡 Kuning (Waspada)"
+    else: zone, badge = "ZONA MERAH", "🔴 Merah (Bahaya)"
         
     return {
-        'score': score,
-        'zone': zone,
-        'badge': badge,
-        'alpa': total_alpa,
-        'late_min': total_late_min,
-        'neg_flags': neg_flags,
-        'pos_flags': pos_flags
+        'score': score, 'zone': zone, 'badge': badge,
+        'alpa': total_alpa, 'late_min': total_late_min,
+        'neg_flags': neg_flags, 'pos_flags': pos_flags
     }
 
-# --- 7. INTEGRASI AI GENERATOR ---
 def generate_ai_student_narrative(student_name, risk_data, flag_history):
     narrative = f"### 🤖 Evaluasi Naratif AI untuk: {student_name}\n\n"
     narrative += f"**Status Risiko:** {risk_data['badge']} (Skor Total Kedisiplinan: **{risk_data['score']} Poin**)\n\n"
@@ -335,20 +272,20 @@ def generate_ai_student_narrative(student_name, risk_data, flag_history):
     if risk_data['alpa'] == 0 and risk_data['late_min'] == 0:
         narrative += "• **Presensi & Ketepatan Waktu:** Siswa menunjukkan tingkat kedisiplinan yang sangat baik tanpa riwayat Alpa maupun keterlambatan.\n"
     else:
-        narrative += f"• **Presensi & Ketepatan Waktu:** Terdeteksi akumulasi **{risk_data['alpa']} hari Alpa** dan akumulasi keterlambatan **{risk_data['late_min']} menit**. Hal ini membutuhkan perhatian pada konsistensi kehadiran.\n"
+        narrative += f"• **Presensi & Ketepatan Waktu:** Terdeteksi akumulasi **{risk_data['alpa']} hari Alpa** dan akumulasi keterlambatan **{risk_data['late_min']} menit**.\n"
         
     narrative += f"• **Catatan Perilaku Guru:** Tercatat {risk_data['pos_flags']} indikator positif dan {risk_data['neg_flags']} catatan indikator negatif.\n"
     
     if risk_data['zone'] == "ZONA MERAH":
-        narrative += "\n⚠️ **Rekomendasi Tindakan (Prioritas BK):** Siswa berada dalam Zona Merah. Disarankan untuk *segera melayangkan Surat Pemanggilan Orang Tua (SP)* dan mengadakan sesi konseling khusus untuk mengidentifikasi kendala utama di rumah/lingkungan."
+        narrative += "\n⚠️ **Rekomendasi Tindakan (Prioritas BK):** Siswa berada dalam Zona Merah. Disarankan untuk *segera melayangkan Surat Pemanggilan Orang Tua (SP)*."
     elif risk_data['zone'] == "ZONA KUNING":
-        narrative += "\n💡 **Rekomendasi Tindakan (Wali Kelas):** Siswa dalam Zona Waspada. Wali Kelas disarankan melakukan dialog personal dan memberikan pendampingan agar kedisiplinan tidak kian menurun."
+        narrative += "\n💡 **Rekomendasi Tindakan (Wali Kelas):** Siswa dalam Zona Waspada. Wali Kelas disarankan melakukan dialog personal."
     else:
         narrative += "\n✨ **Rekomendasi Tindakan:** Pertahankan motivasi belajar siswa dan berikan apresiasi atas kedisiplinan yang terjaga."
         
     return narrative
 
-# --- 8. OTENTIKASI & SESSION STATE ---
+# --- 8. OTENTIKASI & USER INTERFACE ---
 passwords = fetch_config_passwords()
 
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
@@ -365,7 +302,6 @@ if st.session_state.logged_in:
         st.session_state.assigned_class = None
         st.rerun()
 
-# --- LOGIN FORM ---
 if not st.session_state.logged_in:
     st.title("🔐 Login Sistem Kedisiplinan Siswa")
     st.caption("GovTech Education Platform - Early Warning Architecture")
@@ -394,13 +330,11 @@ if not st.session_state.logged_in:
             else:
                 st.error("❌ Password atau Hak Akses Salah!")
 
-# --- DASHBOARD ROLES ---
 else:
-    # 1. GURU PIKET / PELAJARAN
+    # 1. GURU PIKET
     if st.session_state.user_role == "Guru Piket":
         st.title("🕵️‍♂️ Modul Input Guru Piket & Pelajaran")
-        
-        tab_piket_input, tab_flagging = st.tabs(["⏱️ Input Presensi & Keterlambatan", "🚩 Fitur Flagging Perilaku (Max 1x/Minggu)"])
+        tab_piket_input, tab_flagging = st.tabs(["⏱️ Input Presensi & Keterlambatan", "🚩 Fitur Flagging Perilaku"])
         
         with tab_piket_input:
             col_p1, col_p2, col_p3 = st.columns(3)
@@ -410,7 +344,6 @@ else:
             
             students = get_master_students(p_class)
             if students:
-                st.markdown(f"##### Form Input Keterlambatan Khusus - Kelas {p_class}")
                 with st.form("form_late"):
                     sel_student = st.selectbox("Nama Siswa:", students)
                     late_min = st.number_input("Keterlambatan (Dalam Menit):", min_value=0, step=5, value=15)
@@ -422,8 +355,6 @@ else:
                 
         with tab_flagging:
             st.subheader("🚩 Form Flagging Perilaku Siswa")
-            st.info("💡 **Aturan System GovTech:** Maksimal **1 kali/minggu** per siswa untuk mencatat indikator positif/negatif.")
-            
             with st.form("form_flagging"):
                 f_class = st.selectbox("Kelas Siswa:", classes, key="flag_c")
                 f_students = get_master_students(f_class)
@@ -437,13 +368,10 @@ else:
                         success, msg = save_flag_entry(p_date, f_class, f_student, f_type, f_category, f_catatan, "Guru Piket")
                         if success: st.success(msg)
                         else: st.warning(msg)
-                    else:
-                        st.error("Siswa belum dipilih!")
 
     # 2. WALI KELAS & GURU BK
     elif st.session_state.user_role in ["Wali Kelas", "Guru BK"]:
         st.title(f"📊 Dashboard Eksekutif ({st.session_state.user_role})")
-        
         target_c = st.session_state.assigned_class if st.session_state.user_role == "Wali Kelas" else st.selectbox("Pilih Kelas Pantauan BK:", classes)
         
         tab_exec_risk, tab_counseling = st.tabs(["🎯 Matriks Risk Scoring & AI Evaluation", "📝 Modul Pemanggilan / Konseling BK"])
@@ -451,8 +379,6 @@ else:
         with tab_exec_risk:
             st.subheader(f"🛡️ Analisis Risiko Kedisiplinan - Kelas {target_c}")
             students = get_master_students(target_c)
-            
-            # Fetch log sekali saja untuk mengurangi kuota API Google Sheets
             df_late_all = fetch_lateness_logs()
             df_flags_all = fetch_flags()
             
@@ -484,7 +410,7 @@ else:
                 
                 if st.button("✨ Generasi Deskripsi Naratif AI"):
                     r_info = calculate_risk_score(selected_eval_student, target_c, df_late_all, df_flags_all)
-                    flags = df_flags_all[df_flags_all['Nama Siswa'] == selected_eval_student] if not df_flags_all.empty else pd.DataFrame()
+                    flags = df_flags_all[df_flags_all['Nama Siswa'] == selected_eval_student] if not df_flags_all.empty and 'Nama Siswa' in df_flags_all.columns else pd.DataFrame()
                     narrative_text = generate_ai_student_narrative(selected_eval_student, r_info, flags)
                     st.markdown(narrative_text)
             else:
