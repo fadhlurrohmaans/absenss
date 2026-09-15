@@ -69,7 +69,7 @@ def get_year_for_month(month_name):
 
 initial_students = ['ACHMAD FAIRUZ', 'ADARA DWI NOVITA', 'ADELAMULIA PUTRI FAJARINO', 'AHMAD DENIS RUBIANSYAH']
 
-# --- 1. KONEKSI GOOGLE SHEETS (DENGAN CACHE RESOURCE UNTUK PENGHENTIAN ERROR 429) ---
+# --- 1. KONEKSI GOOGLE SHEETS ---
 @st.cache_resource(show_spinner=False)
 def get_gspread_spreadsheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -83,7 +83,7 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Database Google Sheets: {e}")
     st.stop()
 
-# --- 2. LAZY FETCHING DENGAN CACHE & EXPONENTIAL BACKOFF RETRY ---
+# --- 2. LAZY FETCHING DENGAN CACHE & RETRY ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_sheet_with_retry(sheet_name):
     max_retries = 5
@@ -95,7 +95,7 @@ def fetch_sheet_with_retry(sheet_name):
             return pd.DataFrame()
         except APIError as e:
             if "429" in str(e) and attempt < max_retries - 1:
-                time.sleep(2 ** (attempt + 1))  # Exponential backoff (2s, 4s, 8s, 16s)
+                time.sleep(2 ** (attempt + 1))
                 continue
             return pd.DataFrame()
         except Exception:
@@ -130,6 +130,14 @@ def save_master_students(kelas, name_list):
     ws = sh.worksheet("MASTER_SISWA")
     ws.clear()
     ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+    fetch_all_master_df.clear()
+    fetch_sheet_with_retry.clear("MASTER_SISWA")
+
+def save_all_master_df(df_master):
+    df_master = df_master.fillna("")
+    ws = sh.worksheet("MASTER_SISWA")
+    ws.clear()
+    ws.update(range_name='A1', values=[df_master.columns.values.tolist()] + df_master.values.tolist())
     fetch_all_master_df.clear()
     fetch_sheet_with_retry.clear("MASTER_SISWA")
 
@@ -438,14 +446,13 @@ if st.session_state.logged_in:
         st.session_state.assigned_class = None
         st.rerun()
 
-# GERBANG LOGIN TERPISAH (CEPAT & RINGAN)
+# GERBANG LOGIN TERPISAH
 if not st.session_state.logged_in:
     st.title("🔐 Login Sistem Keamanan Absensi & Kedisiplinan")
     st.caption("GovTech Education Platform - Integrated Early Warning System")
     
     login_tab_wali, login_tab_staf = st.tabs(["🏫 Sekretaris / Wali Kelas", "🏢 Guru Piket, BK, Kepsek & Admin"])
     
-    # 1. HALAMAN LOGIN SEKRETARIS / WALI KELAS
     with login_tab_wali:
         with st.form("form_login_wali"):
             st.subheader("Login Sekretaris / Wali Kelas")
@@ -462,7 +469,6 @@ if not st.session_state.logged_in:
                 else:
                     st.error("❌ Password Kelas Salah!")
                     
-    # 2. HALAMAN LOGIN STAF & MANAJEMEN SEKOLAH
     with login_tab_staf:
         with st.form("form_login_staf"):
             st.subheader("Login Staf & Manajemen Sekolah")
@@ -487,7 +493,7 @@ if not st.session_state.logged_in:
                     st.error("❌ Password Akun Salah!")
 
 else:
-    # 1. SEKRETARIS / WALI KELAS (DASHBOARD GRID & REKAP)
+    # 1. SEKRETARIS / WALI KELAS
     if st.session_state.user_role == "Sekretaris / Wali Kelas":
         my_class = st.session_state.assigned_class
         st.title(f"🏫 Ruang Kerja Sekretaris / Wali Kelas {my_class}")
@@ -501,7 +507,6 @@ else:
             "👥 Kelola Master Siswa"
         ])
         
-        # TAB 1: ISI ABSENSI BULANAN
         with tab_absen:
             selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
             col_config, disabled_cols, monthly_holidays = get_calendar_config(selected_month)
@@ -546,7 +551,6 @@ else:
                 use_container_width=True
             )
 
-        # TAB 2: REKAP GANJIL
         with tab_ganjil:
             st.subheader(f"🍂 Rekapitulasi Semester Ganjil (Juli - Desember) - Kelas {my_class}")
             if st.button("🔄 Muat / Perbarui Rekap Semester Ganjil", type="primary", key="btn_ganjil_sk"):
@@ -557,7 +561,6 @@ else:
             if f"ganjil_{my_class}" in st.session_state:
                 st.dataframe(st.session_state[f"ganjil_{my_class}"], use_container_width=True, hide_index=True)
 
-        # TAB 3: REKAP GENAP
         with tab_genap:
             st.subheader(f"🌸 Rekapitulasi Semester Genap (Januari - Juni) - Kelas {my_class}")
             if st.button("🔄 Muat / Perbarui Rekap Semester Genap", type="primary", key="btn_genap_sk"):
@@ -568,7 +571,6 @@ else:
             if f"genap_{my_class}" in st.session_state:
                 st.dataframe(st.session_state[f"genap_{my_class}"], use_container_width=True, hide_index=True)
 
-        # TAB 4: REKAP TAHUNAN
         with tab_rekap:
             st.subheader(f"📊 Rekapitulasi Akumulasi 1 Tahun - Kelas {my_class}")
             if st.button("🔄 Muat / Perbarui Rekap 1 Tahun", type="primary", key="btn_yearly_sk"):
@@ -579,7 +581,6 @@ else:
             if f"yearly_{my_class}" in st.session_state:
                 st.dataframe(st.session_state[f"yearly_{my_class}"], use_container_width=True, hide_index=True)
 
-        # TAB 5: OPTIMIZED RISK SCORING & AI EVALUATION
         with tab_risk:
             st.subheader(f"🛡️ Analisis Risiko Kedisiplinan Siswa - Kelas {my_class}")
             if st.button("🔄 Hitung Matriks Risiko Kelas", type="primary", key="btn_risk_sk"):
@@ -608,7 +609,6 @@ else:
             else:
                 st.info("Klik tombol di atas untuk memuat analisis risiko kelas.")
 
-        # TAB 6: KELOLA MASTER SISWA
         with tab_nama:
             st.subheader(f"👥 Pengaturan Daftar Siswa Kelas {my_class}")
             with st.expander("📥 📤 Import / Export Data Master Siswa (CSV / Excel)", expanded=False):
@@ -768,19 +768,186 @@ else:
         else:
             st.info("Klik tombol di atas untuk memuat laporan makro seluruh kelas.")
 
-    # 5. ADMIN SYSTEM
+    # 5. ADMIN SYSTEM (MODUL UTAMA YANG DITINGKATKAN)
     elif st.session_state.user_role == "Admin":
-        st.title("🛠️ Pusat Pengaturan Administrator")
-        tab_pass, tab_master_all = st.tabs(["🔐 Kelola Password", "👥 Kelola Database Master Pusat"])
+        st.title("🛠️ Pusat Pengaturan Administrator System")
+        tab_pass, tab_master_all = st.tabs(["🔐 Kelola Pengguna (CRUD)", "👥 Kelola Data Master Siswa (CRUD & I/O)"])
         
-        passwords = fetch_config_passwords()
+        # --- TAB 1: KELOLA PENGGUNA (CRUD) ---
         with tab_pass:
-            config_df = pd.DataFrame(list(passwords.items()), columns=['Key', 'Password'])
-            edited_config = st.data_editor(config_df, disabled=['Key'], use_container_width=True)
-            if st.button("💾 Simpan Password Baru", type="primary"):
-                save_config_passwords(dict(zip(edited_config['Key'], edited_config['Password'])))
-                st.success("🔒 Password berhasil diperbarui!")
-                st.rerun()
+            st.subheader("🔐 Manajemen Akun Pengguna & Akses Hak Masuk")
+            st.caption("Kelola hak akses, tambah pengguna baru, perbarui password, atau hapus akun pengguna.")
+            
+            passwords = fetch_config_passwords()
+            
+            col_add_user, col_edit_user = st.columns([1, 2])
+            
+            # Create User Form
+            with col_add_user:
+                with st.expander("➕ Tambah Pengguna Baru", expanded=True):
+                    with st.form("form_add_user"):
+                        new_key = st.text_input("Nama Pengguna / Role Key (Contoh: '7A', 'Admin'):")
+                        new_pass = st.text_input("Password Baru:", type="password")
+                        if st.form_submit_button("➕ Tambah Akun", type="primary"):
+                            if not new_key or not new_pass:
+                                st.error("❌ Nama pengguna dan password wajib diisi!")
+                            elif new_key in passwords:
+                                st.warning(f"⚠️ Pengguna '{new_key}' sudah ada.")
+                            else:
+                                passwords[new_key] = new_pass
+                                save_config_passwords(passwords)
+                                st.success(f"🎉 Akun '{new_key}' berhasil ditambahkan!")
+                                st.rerun()
+            
+            # Read, Update & Delete Users Grid
+            with col_edit_user:
+                st.markdown("##### 📋 Daftar Akun Pengguna (Edit Password & Hapus)")
+                st.caption("Ubah kata sandi langsung pada tabel, atau hapus baris untuk menghapus pengguna.")
+                config_df = pd.DataFrame(list(passwords.items()), columns=['Key', 'Password'])
                 
+                edited_config = st.data_editor(
+                    config_df, 
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key="editor_users"
+                )
+                
+                if st.button("💾 Simpan Perubahan Pengguna", type="primary"):
+                    valid_rows = edited_config.dropna(subset=['Key'])
+                    new_pass_dict = dict(zip(valid_rows['Key'].astype(str).str.strip(), valid_rows['Password'].astype(str).str.strip()))
+                    new_pass_dict = {k: v for k, v in new_pass_dict.items() if k != ""}
+                    save_config_passwords(new_pass_dict)
+                    st.success("🔒 Data pengguna & password berhasil diperbarui!")
+                    st.rerun()
+
+        # --- TAB 2: KELOLA MASTER SISWA (CRUD & IMPORT/EXPORT) ---
         with tab_master_all:
-            st.dataframe(fetch_all_master_df(), use_container_width=True)
+            st.subheader("👥 Kelola Master Data Siswa Pusat")
+            st.caption("Modul Administrator untuk mengelola seluruh data master siswa (CRUD), serta Export/Import batch gabungan.")
+            
+            admin_siswa_tab1, admin_siswa_tab2, admin_siswa_tab3 = st.tabs([
+                "📝 Grid Editor Master Siswa", 
+                "➕ Single Form Add/Remove",
+                "📦 Export & Import Batch Master"
+            ])
+            
+            df_all_master = fetch_all_master_df()
+            
+            # 1. Dynamic Grid Editor (Read, Update, Dynamic Add/Delete)
+            with admin_siswa_tab1:
+                st.markdown("##### ✏️ Master Siswa Grid Editor (Seluruh Kelas)")
+                st.info("💡 Anda dapat menambah, mengubah nama, atau menghapus baris siswa pada tabel seluruh kelas di bawah ini.")
+                
+                edited_master = st.data_editor(
+                    df_all_master,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key="admin_editor_master"
+                )
+                
+                if st.button("💾 Simpan Perubahan Master Siswa", type="primary", key="btn_save_all_master"):
+                    with st.spinner("Menyimpan seluruh data master ke database..."):
+                        save_all_master_df(edited_master)
+                    st.success("🎉 Database Master Siswa berhasil diperbarui!")
+                    st.rerun()
+
+            # 2. Single CRUD Forms
+            with admin_siswa_tab2:
+                col_c1, col_c2 = st.columns(2)
+                
+                # Create Student
+                with col_c1:
+                    with st.expander("➕ Tambah Siswa Baru ke Kelas", expanded=True):
+                        with st.form("form_admin_add_siswa"):
+                            target_c = st.selectbox("Pilih Kelas Target:", classes, key="adm_add_c")
+                            new_s_name = st.text_input("Nama Lengkap Siswa Baru:")
+                            if st.form_submit_button("➕ Tambahkan Siswa"):
+                                if new_s_name.strip():
+                                    current_list = get_master_students(target_c)
+                                    if new_s_name.strip() in current_list:
+                                        st.warning("⚠️ Nama siswa sudah ada di kelas tersebut.")
+                                    else:
+                                        current_list.append(new_s_name.strip())
+                                        save_master_students(target_c, current_list)
+                                        st.success(f"🎉 Siswa '{new_s_name}' berhasil ditambahkan ke kelas {target_c}!")
+                                        st.rerun()
+                                else:
+                                    st.error("Nama siswa tidak boleh kosong!")
+
+                # Delete Student
+                with col_c2:
+                    with st.expander("🗑️ Hapus Siswa dari Kelas", expanded=True):
+                        with st.form("form_admin_del_siswa"):
+                            target_del_c = st.selectbox("Pilih Kelas Target:", classes, key="adm_del_c")
+                            c_students = get_master_students(target_del_c)
+                            siswa_to_del = st.selectbox("Pilih Siswa yang Akan Dihapus:", c_students) if c_students else None
+                            if st.form_submit_button("🗑️ Hapus Siswa Terpilih", type="secondary"):
+                                if siswa_to_del:
+                                    updated_list = [s for s in c_students if s != siswa_to_del]
+                                    save_master_students(target_del_c, updated_list)
+                                    st.success(f"🎉 Siswa '{siswa_to_del}' berhasil dihapus dari kelas {target_del_c}!")
+                                    st.rerun()
+                                else:
+                                    st.error("Tidak ada siswa untuk dihapus pada kelas ini.")
+
+            # 3. Batch Import / Export
+            with admin_siswa_tab3:
+                st.markdown("##### 📦 Batch Import & Export Data Master")
+                exp_col, imp_col = st.columns(2)
+                
+                # Export Section
+                with exp_col:
+                    st.markdown("### 📤 Export Master Data")
+                    exp_mode = st.radio("Pilih Mode Export:", ["Seluruh Kelas (Full Matrix)", "Per Kelas Spesifik"])
+                    
+                    if exp_mode == "Seluruh Kelas (Full Matrix)":
+                        st.download_button(
+                            label="⬇️ Download Full Master Data (CSV)",
+                            data=df_all_master.to_csv(index=False).encode('utf-8'),
+                            file_name="Master_Siswa_All_Classes.csv",
+                            mime="text/csv",
+                            type="primary"
+                        )
+                    else:
+                        selected_exp_c = st.selectbox("Pilih Kelas yang Diexport:", classes, key="sel_exp_c")
+                        c_list = get_master_students(selected_exp_c)
+                        df_c_exp = pd.DataFrame(c_list, columns=["Nama Siswa"])
+                        st.download_button(
+                            label=f"⬇️ Download Master Kelas {selected_exp_c} (CSV)",
+                            data=df_c_exp.to_csv(index=False).encode('utf-8'),
+                            file_name=f"Master_Siswa_{selected_exp_c}.csv",
+                            mime="text/csv"
+                        )
+
+                # Import Section
+                with imp_col:
+                    st.markdown("### 📥 Import Master Data")
+                    imp_mode = st.radio("Pilih Mode Import:", ["Import per Kelas", "Import Full Matrix (Banyak Kelas)"])
+                    
+                    if imp_mode == "Import per Kelas":
+                        target_imp_c = st.selectbox("Pilih Kelas Target Import:", classes, key="sel_imp_c")
+                        up_file_c = st.file_uploader(f"Upload CSV/Excel untuk Kelas {target_imp_c}:", type=["csv", "xlsx"], key="up_c")
+                        if up_file_c is not None:
+                            try:
+                                df_imp = pd.read_csv(up_file_c) if up_file_c.name.endswith(".csv") else pd.read_excel(up_file_c)
+                                imp_names = df_imp["Nama Siswa"].dropna().astype(str).str.strip().tolist() if "Nama Siswa" in df_imp.columns else df_imp.iloc[:, 0].dropna().astype(str).str.strip().tolist()
+                                imp_names = [n for n in imp_names if n not in ["", "nan", "None"]]
+                                st.success(f"Terdeteksi {len(imp_names)} siswa.")
+                                if st.button(f"💾 Terapkan Import Kelas {target_imp_c}", type="primary"):
+                                    save_master_students(target_imp_c, imp_names)
+                                    st.success(f"🎉 Master Siswa Kelas {target_imp_c} berhasil diperbarui!")
+                                    st.rerun()
+                            except Exception as ex:
+                                st.error(f"❌ Error membaca file: {ex}")
+                    else:
+                        up_file_full = st.file_uploader("Upload CSV/Excel Full Matrix (Nama Kolom = Kelas):", type=["csv", "xlsx"], key="up_full")
+                        if up_file_full is not None:
+                            try:
+                                df_imp_full = pd.read_csv(up_file_full) if up_file_full.name.endswith(".csv") else pd.read_excel(up_file_full)
+                                st.dataframe(df_imp_full.head(), use_container_width=True)
+                                if st.button("💾 Terapkan Import Full Matrix Master Siswa", type="primary"):
+                                    save_all_master_df(df_imp_full)
+                                    st.success("🎉 Database Master Siswa Seluruh Kelas berhasil diperbarui!")
+                                    st.rerun()
+                            except Exception as ex:
+                                st.error(f"❌ Error membaca file: {ex}")
