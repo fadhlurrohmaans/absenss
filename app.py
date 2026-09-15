@@ -194,11 +194,11 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
     year_week = f"{dt.year}-{dt.isocalendar()[1]}"
     
     df_flags = fetch_flags()
-    if not df_flags.empty and 'Nama Siswa' in df_flags.columns and 'TahunMinggu' in df_flags.columns:
-        existing = df_flags[(df_flags['Nama Siswa'] == nama) & (df_flags['TahunMinggu'] == year_week)]
+    if not df_flags.empty and 'Nama Siswa' in df_flags.columns and 'Tanggal' in df_flags.columns:
+        # Koreksi: Mencegah spam klik (Flag tipe dan tanggal yang sama persis), BUKAN memblokir 1 minggu penuh
+        existing = df_flags[(df_flags['Nama Siswa'] == nama) & (df_flags['Tanggal'] == str(dt)) & (df_flags['Tipe'] == tipe)]
         if len(existing) > 0:
-            return False, f"⚠️ Siswa '{nama}' sudah diberikan flagging pada minggu ini ({year_week})."
-
+            return False, f"⚠️ Siswa '{nama}' sudah diberikan flagging {tipe} pada hari ini."
     try:
         try: ws = sh.worksheet("FLAGS_PERILAKU")
         except WorksheetNotFound:
