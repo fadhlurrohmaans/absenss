@@ -147,8 +147,12 @@ def fetch_config_passwords():
     if not df.empty and 'Key' in df.columns and 'Password' in df.columns:
         return dict(zip(df['Key'].astype(str), df['Password'].astype(str)))
     
-    keys = ['Admin', 'Guru Piket', 'Guru BK', 'Kepala Sekolah'] + classes
-    default_passwords = ['admin123', 'piket123', 'bk123', 'kepsek123'] + [f"{c.lower()}123" for c in classes]
+    # PERUBAHAN: Menambahkan Key & Password Wali Kelas dan Sekretaris secara terpisah
+    keys = ['Admin', 'Guru Piket', 'Guru BK', 'Kepala Sekolah'] + classes + [f"Wali{c}" for c in classes]
+    default_passwords = ['admin123', 'piket123', 'bk123', 'kepsek123'] + \
+                        [f"{c.lower()}123" for c in classes] + \
+                        [f"wali{c.lower()}" for c in classes]
+    
     return dict(zip(keys, default_passwords))
 
 def save_config_passwords(password_dict):
@@ -160,13 +164,11 @@ def save_config_passwords(password_dict):
     fetch_sheet_with_retry.clear("CONFIG")
 
 # --- 4. LOG KETERLAMBATAN, FLAGGING & KONSELING ---
-def fetch_lateness_logs():
-    return fetch_sheet_with_retry("LOG_KETERLAMBATAN")
+def fetch_lateness_logs(): return fetch_sheet_with_retry("LOG_KETERLAMBATAN")
 
 def save_lateness_entry(tanggal, kelas, nama, menit, pencatat):
     try:
-        try:
-            ws = sh.worksheet("LOG_KETERLAMBATAN")
+        try: ws = sh.worksheet("LOG_KETERLAMBATAN")
         except WorksheetNotFound:
             ws = sh.add_worksheet("LOG_KETERLAMBATAN", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'Kelas', 'Nama Siswa', 'Menit Terlambat', 'Pencatat'])
@@ -177,8 +179,7 @@ def save_lateness_entry(tanggal, kelas, nama, menit, pencatat):
         st.error(f"Gagal menyimpan keterlambatan: {e}")
         return False
 
-def fetch_flags():
-    return fetch_sheet_with_retry("FLAGS_PERILAKU")
+def fetch_flags(): return fetch_sheet_with_retry("FLAGS_PERILAKU")
 
 def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
     dt = datetime.datetime.strptime(str(tanggal), "%Y-%m-%d").date() if isinstance(tanggal, str) else tanggal
@@ -191,35 +192,28 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
             return False, f"⚠️ Siswa '{nama}' sudah diberikan flagging pada minggu ini ({year_week})."
 
     try:
-        try:
-            ws = sh.worksheet("FLAGS_PERILAKU")
+        try: ws = sh.worksheet("FLAGS_PERILAKU")
         except WorksheetNotFound:
             ws = sh.add_worksheet("FLAGS_PERILAKU", rows="1000", cols="10")
             ws.append_row(['Tanggal', 'TahunMinggu', 'Kelas', 'Nama Siswa', 'Tipe', 'Kategori', 'Catatan', 'Pencatat'])
         ws.append_row([str(dt), year_week, kelas, nama, tipe, kategori, catatan, pencatat])
         fetch_sheet_with_retry.clear("FLAGS_PERILAKU")
         return True, "✅ Flagging perilaku berhasil dicatat!"
-    except Exception as e:
-        return False, f"Gagal menyimpan flag: {e}"
+    except Exception as e: return False, f"Gagal menyimpan flag: {e}"
 
-def fetch_counseling_logs():
-    return fetch_sheet_with_retry("KONSELING_BK")
+def fetch_counseling_logs(): return fetch_sheet_with_retry("KONSELING_BK")
 
 def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, konselor):
     try:
-        try:
-            ws = sh.worksheet("KONSELING_BK")
+        try: ws = sh.worksheet("KONSELING_BK")
         except WorksheetNotFound:
             ws = sh.add_worksheet("KONSELING_BK", rows="500", cols="10")
             ws.append_row(['ID', 'Tanggal', 'Kelas', 'Nama Siswa', 'Ringkasan', 'Rekomendasi', 'Status', 'Konselor'])
-        
         c_id = f"BK-{int(datetime.datetime.now().timestamp())}"
         ws.append_row([c_id, str(tanggal), kelas, nama, ringkasan, rekomendasi, status, konselor])
         fetch_sheet_with_retry.clear("KONSELING_BK")
         return True
-    except Exception as e:
-        st.error(f"Gagal menyimpan catatan konseling: {e}")
-        return False
+    except Exception as e: return False
 
 # --- 5. DATA ABSENSI BULANAN & GRID EDITOR ---
 def fetch_attendance_data_from_cache(kelas, month):
@@ -252,16 +246,12 @@ def fetch_attendance_data_from_cache(kelas, month):
 
 def save_attendance_data(kelas, month, df):
     sheet_name = f"{kelas}_{month}"
-    try:
-        ws = sh.worksheet(sheet_name)
-    except Exception:
-        ws = sh.add_worksheet(title=sheet_name, rows="100", cols="40")
+    try: ws = sh.worksheet(sheet_name)
+    except Exception: ws = sh.add_worksheet(title=sheet_name, rows="100", cols="40")
         
     ws.clear()
-    df = df.fillna('')
-    df = df.astype(str)
-    data_to_write = [df.columns.values.tolist()] + df.values.tolist()
-    ws.update(range_name='A1', values=data_to_write)
+    df = df.fillna('').astype(str)
+    ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_sheet_with_retry.clear(sheet_name)
 
 def get_calendar_config(selected_month):
@@ -270,9 +260,7 @@ def get_calendar_config(selected_month):
     _, max_days = calendar.monthrange(year, month_num)
     days_id = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Mig"]
     
-    disabled_cols = []
-    col_config = {}
-    monthly_holidays = []
+    disabled_cols, col_config, monthly_holidays = [], {}, []
     
     for i in range(1, 32):
         col_name = f"Tgl {i}"
@@ -283,16 +271,13 @@ def get_calendar_config(selected_month):
             dt = datetime.date(year, month_num, i)
             day_name = days_id[dt.weekday()]
             is_off, reason = is_day_off(dt)
-            
             if is_off:
                 disabled_cols.append(col_name)
                 if reason != "Weekend":
                     col_config[col_name] = st.column_config.TextColumn(label=f"{i} (🔴)")
                     monthly_holidays.append((i, day_name, reason))
-                else:
-                    col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
-            else:
-                col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
+                else: col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
+            else: col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
     return col_config, disabled_cols, monthly_holidays
 
 def generate_full_report(df):
@@ -300,11 +285,7 @@ def generate_full_report(df):
     s_list, i_list, a_list, h_list = [], [], [], []
     pct_h_list, pct_i_list, pct_a_list, pct_s_list = [], [], [], []
     
-    active_date_cols = []
-    for col in date_cols:
-        vals = [str(v).strip().upper() for v in df_report[col].values]
-        if any(v in ['H', 'HADIR', 'S', 'SAKIT', 'I', 'IJIN', 'IZIN', 'A', 'ALPHA', 'ALPA', '.', 'V'] for v in vals):
-            active_date_cols.append(col)
+    active_date_cols = [c for c in date_cols if any(str(v).strip().upper() in ['H', 'S', 'I', 'A', '.', 'V'] for v in df_report[c].values)]
 
     for _, row in df_report.iterrows():
         s, i, a, h = 0, 0, 0, 0
@@ -376,31 +357,26 @@ def get_class_alpa_summary(kelas):
 def calculate_class_risk_table(kelas, df_late_all=None, df_flags_all=None):
     students = get_master_students(kelas)
     alpa_map = get_class_alpa_summary(kelas)
-    
     if df_late_all is None: df_late_all = fetch_lateness_logs()
     if df_flags_all is None: df_flags_all = fetch_flags()
     
     risk_table = []
     for s in students:
         total_alpa = alpa_map.get(s, 0)
+        total_late_min, neg_flags, pos_flags = 0, 0, 0
         
-        total_late_min = 0
-        if not df_late_all.empty and 'Nama Siswa' in df_late_all.columns and 'Kelas' in df_late_all.columns:
+        if not df_late_all.empty and 'Nama Siswa' in df_late_all.columns:
             s_late = df_late_all[(df_late_all['Nama Siswa'] == s) & (df_late_all['Kelas'] == kelas)]
             total_late_min = s_late['Menit Terlambat'].astype(int).sum() if not s_late.empty else 0
             
-        neg_flags, pos_flags = 0, 0
-        if not df_flags_all.empty and 'Nama Siswa' in df_flags_all.columns and 'Kelas' in df_flags_all.columns:
+        if not df_flags_all.empty and 'Nama Siswa' in df_flags_all.columns:
             s_flags = df_flags_all[(df_flags_all['Nama Siswa'] == s) & (df_flags_all['Kelas'] == kelas)]
             if not s_flags.empty:
                 neg_flags = len(s_flags[s_flags['Tipe'] == 'NEGATIF'])
                 pos_flags = len(s_flags[s_flags['Tipe'] == 'POSITIF'])
                 
         score = max(0, (total_alpa * 15) + (total_late_min // 5) + (neg_flags * 10) - (pos_flags * 5))
-        
-        if score <= 20: zone = "ZONA HIJAU"
-        elif score <= 50: zone = "ZONA KUNING"
-        else: zone = "ZONA MERAH"
+        zone = "ZONA HIJAU" if score <= 20 else ("ZONA KUNING" if score <= 50 else "ZONA MERAH")
             
         risk_table.append({
             'Nama Siswa': s, 'Zona Risiko': zone, 'Skor Poin': score,
@@ -411,24 +387,13 @@ def calculate_class_risk_table(kelas, df_late_all=None, df_flags_all=None):
 
 def generate_ai_student_narrative(student_name, risk_row):
     badge = "🟢 Hijau (Aman)" if risk_row['Zona Risiko'] == "ZONA HIJAU" else ("🟡 Kuning (Waspada)" if risk_row['Zona Risiko'] == "ZONA KUNING" else "🔴 Merah (Bahaya)")
-    
-    narrative = f"### 🤖 Evaluasi Naratif AI untuk: {student_name}\n\n"
-    narrative += f"**Status Risiko:** {badge} (Skor Total Kedisiplinan: **{risk_row['Skor Poin']} Poin**)\n\n"
-    
-    if risk_row['Alpa (Hari)'] == 0 and risk_row['Terlambat (Menit)'] == 0:
-        narrative += "• **Presensi & Ketepatan Waktu:** Siswa menunjukkan tingkat kedisiplinan yang sangat baik tanpa riwayat Alpa maupun keterlambatan.\n"
-    else:
-        narrative += f"• **Presensi & Ketepatan Waktu:** Terdeteksi akumulasi **{risk_row['Alpa (Hari)']} hari Alpa** dan akumulasi keterlambatan **{risk_row['Terlambat (Menit)']} menit**.\n"
-        
+    narrative = f"### 🤖 Evaluasi Naratif AI untuk: {student_name}\n\n**Status Risiko:** {badge} (Skor Total Kedisiplinan: **{risk_row['Skor Poin']} Poin**)\n\n"
+    if risk_row['Alpa (Hari)'] == 0 and risk_row['Terlambat (Menit)'] == 0: narrative += "• **Presensi & Ketepatan Waktu:** Siswa menunjukkan tingkat kedisiplinan yang sangat baik tanpa riwayat Alpa maupun keterlambatan.\n"
+    else: narrative += f"• **Presensi & Ketepatan Waktu:** Terdeteksi akumulasi **{risk_row['Alpa (Hari)']} hari Alpa** dan akumulasi keterlambatan **{risk_row['Terlambat (Menit)']} menit**.\n"
     narrative += f"• **Catatan Perilaku Guru:** Tercatat {risk_row['Flag Positif']} indikator positif dan {risk_row['Flag Negatif']} catatan indikator negatif.\n"
-    
-    if risk_row['Zona Risiko'] == "ZONA MERAH":
-        narrative += "\n⚠️ **Rekomendasi Tindakan (Prioritas BK):** Siswa berada dalam Zona Merah. Disarankan untuk *segera melayangkan Surat Pemanggilan Orang Tua (SP)*."
-    elif risk_row['Zona Risiko'] == "ZONA KUNING":
-        narrative += "\n💡 **Rekomendasi Tindakan (Wali Kelas):** Siswa dalam Zona Waspada. Wali Kelas disarankan melakukan dialog personal."
-    else:
-        narrative += "\n✨ **Rekomendasi Tindakan:** Pertahankan motivasi belajar siswa dan berikan apresiasi atas kedisiplinan yang terjaga."
-        
+    if risk_row['Zona Risiko'] == "ZONA MERAH": narrative += "\n⚠️ **Rekomendasi Tindakan (Prioritas BK):** Siswa berada dalam Zona Merah. Disarankan untuk *segera melayangkan Surat Pemanggilan Orang Tua (SP)*."
+    elif risk_row['Zona Risiko'] == "ZONA KUNING": narrative += "\n💡 **Rekomendasi Tindakan (Wali Kelas):** Siswa dalam Zona Waspada. Wali Kelas disarankan melakukan dialog personal."
+    else: narrative += "\n✨ **Rekomendasi Tindakan:** Pertahankan motivasi belajar siswa dan berikan apresiasi atas kedisiplinan yang terjaga."
     return narrative
 
 # --- 7. OTENTIKASI & USER INTERFACE TERPISAH ---
@@ -453,21 +418,27 @@ if not st.session_state.logged_in:
     
     login_tab_wali, login_tab_staf = st.tabs(["🏫 Sekretaris / Wali Kelas", "🏢 Guru Piket, BK, Kepsek & Admin"])
     
+    # PERUBAHAN LOGIN: Memisahkan peran Sekretaris & Wali Kelas dengan opsi radio button
     with login_tab_wali:
         with st.form("form_login_wali"):
-            st.subheader("Login Sekretaris / Wali Kelas")
+            st.subheader("Login Ruang Kelas")
+            role_wali = st.radio("Masuk Sebagai:", ["Sekretaris Kelas", "Wali Kelas"], horizontal=True)
             target_class = st.selectbox("Pilih Kelas Anda:", classes, key="sel_wali_class")
-            password_wali = st.text_input("Masukkan Password Kelas:", type="password", key="pass_wali")
+            password_wali = st.text_input("Masukkan Password:", type="password", key="pass_wali")
             
             if st.form_submit_button("🔑 Masuk Ke Ruang Kelas", type="primary"):
                 passwords = fetch_config_passwords()
-                if password_wali == passwords.get(target_class):
+                
+                # Cek peran untuk menentukan key yang dicocokkan
+                login_key = target_class if role_wali == "Sekretaris Kelas" else f"Wali{target_class}"
+                
+                if password_wali == passwords.get(login_key):
                     st.session_state.logged_in = True
-                    st.session_state.user_role = "Sekretaris / Wali Kelas"
+                    st.session_state.user_role = role_wali
                     st.session_state.assigned_class = target_class
                     st.rerun()
                 else:
-                    st.error("❌ Password Kelas Salah!")
+                    st.error("❌ Password Salah! Pastikan Anda menggunakan sandi yang benar sesuai peran (Sekretaris/Wali).")
                     
     with login_tab_staf:
         with st.form("form_login_staf"):
@@ -477,12 +448,7 @@ if not st.session_state.logged_in:
             
             if st.form_submit_button("🔑 Masuk Portal Staf", type="primary"):
                 passwords = fetch_config_passwords()
-                role_key_map = {
-                    "Guru Piket / Pelajaran": "Guru Piket",
-                    "Guru BK": "Guru BK",
-                    "Kepala Sekolah": "Kepala Sekolah",
-                    "Administrator System": "Admin"
-                }
+                role_key_map = {"Guru Piket / Pelajaran": "Guru Piket", "Guru BK": "Guru BK", "Kepala Sekolah": "Kepala Sekolah", "Administrator System": "Admin"}
                 key_name = role_key_map.get(role_staf)
                 if password_staf == passwords.get(key_name):
                     st.session_state.logged_in = True
@@ -493,19 +459,26 @@ if not st.session_state.logged_in:
                     st.error("❌ Password Akun Salah!")
 
 else:
-    # 1. SEKRETARIS / WALI KELAS
-    if st.session_state.user_role == "Sekretaris / Wali Kelas":
+    # 1. SEKRETARIS KELAS & WALI KELAS (DIPISAH BERDASARKAN HAK AKSES TAB)
+    if st.session_state.user_role in ["Sekretaris Kelas", "Wali Kelas"]:
         my_class = st.session_state.assigned_class
-        st.title(f"🏫 Ruang Kerja Sekretaris / Wali Kelas {my_class}")
+        st.title(f"🏫 Ruang Kerja {st.session_state.user_role} {my_class}")
         
-        tab_absen, tab_ganjil, tab_genap, tab_rekap, tab_risk, tab_nama = st.tabs([
-            "📝 Isi Absensi Bulanan (Grid)", 
-            "🍂 Rekap Semester Ganjil",
-            "🌸 Rekap Semester Genap",
-            "📊 Rekap 1 Tahun",
-            "🎯 Matriks Risk Scoring & AI",
-            "👥 Kelola Master Siswa"
-        ])
+        # PERUBAHAN: Menentukan tab yang terlihat berdasarkan hak akses
+        if st.session_state.user_role == "Wali Kelas":
+            tabs = st.tabs([
+                "📝 Isi Absensi Bulanan (Grid)", 
+                "🍂 Rekap Semester Ganjil",
+                "🌸 Rekap Semester Genap",
+                "📊 Rekap 1 Tahun",
+                "🎯 Matriks Risk Scoring & AI",
+                "👥 Kelola Master Siswa"
+            ])
+            tab_absen, tab_ganjil, tab_genap, tab_rekap, tab_risk, tab_nama = tabs
+        else:
+            # Sekretaris Kelas hanya menerima 1 Tab
+            tabs = st.tabs(["📝 Isi Absensi Bulanan (Grid)"])
+            tab_absen = tabs[0]
         
         with tab_absen:
             selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
@@ -546,123 +519,101 @@ else:
             st.write("---")
             st.subheader("📋 Ringkasan Kehadiran Bulan Ini")
             full_report = generate_full_report(edited_df)
-            st.dataframe(
-                full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '% Hadir', '% Izin', '% Alpha', '% Sakit']], 
-                use_container_width=True
-            )
+            st.dataframe(full_report[['Nama Siswa', 'S', 'I', 'A', 'Hadir', '% Hadir', '% Izin', '% Alpha', '% Sakit']], use_container_width=True)
 
-        with tab_ganjil:
-            st.subheader(f"🍂 Rekapitulasi Semester Ganjil (Juli - Desember) - Kelas {my_class}")
-            if st.button("🔄 Muat / Perbarui Rekap Semester Ganjil", type="primary", key="btn_ganjil_sk"):
-                with st.spinner("Kalkulasi Semester Ganjil..."):
-                    st.session_state[f"ganjil_{my_class}"] = calculate_period_recap(my_class, ganjil_months)
-                st.success("🎉 Rekap Semester Ganjil diperbarui!")
-                
-            if f"ganjil_{my_class}" in st.session_state:
-                st.dataframe(st.session_state[f"ganjil_{my_class}"], use_container_width=True, hide_index=True)
+        # Tab ekstra hanya dimuat dan ditampilkan untuk Wali Kelas
+        if st.session_state.user_role == "Wali Kelas":
+            with tab_ganjil:
+                st.subheader(f"🍂 Rekapitulasi Semester Ganjil (Juli - Desember) - Kelas {my_class}")
+                if st.button("🔄 Muat / Perbarui Rekap Semester Ganjil", type="primary", key="btn_ganjil_sk"):
+                    with st.spinner("Kalkulasi Semester Ganjil..."):
+                        st.session_state[f"ganjil_{my_class}"] = calculate_period_recap(my_class, ganjil_months)
+                    st.success("🎉 Rekap Semester Ganjil diperbarui!")
+                if f"ganjil_{my_class}" in st.session_state:
+                    st.dataframe(st.session_state[f"ganjil_{my_class}"], use_container_width=True, hide_index=True)
 
-        with tab_genap:
-            st.subheader(f"🌸 Rekapitulasi Semester Genap (Januari - Juni) - Kelas {my_class}")
-            if st.button("🔄 Muat / Perbarui Rekap Semester Genap", type="primary", key="btn_genap_sk"):
-                with st.spinner("Kalkulasi Semester Genap..."):
-                    st.session_state[f"genap_{my_class}"] = calculate_period_recap(my_class, genap_months)
-                st.success("🎉 Rekap Semester Genap diperbarui!")
-                
-            if f"genap_{my_class}" in st.session_state:
-                st.dataframe(st.session_state[f"genap_{my_class}"], use_container_width=True, hide_index=True)
+            with tab_genap:
+                st.subheader(f"🌸 Rekapitulasi Semester Genap (Januari - Juni) - Kelas {my_class}")
+                if st.button("🔄 Muat / Perbarui Rekap Semester Genap", type="primary", key="btn_genap_sk"):
+                    with st.spinner("Kalkulasi Semester Genap..."):
+                        st.session_state[f"genap_{my_class}"] = calculate_period_recap(my_class, genap_months)
+                    st.success("🎉 Rekap Semester Genap diperbarui!")
+                if f"genap_{my_class}" in st.session_state:
+                    st.dataframe(st.session_state[f"genap_{my_class}"], use_container_width=True, hide_index=True)
 
-        with tab_rekap:
-            st.subheader(f"📊 Rekapitulasi Akumulasi 1 Tahun - Kelas {my_class}")
-            if st.button("🔄 Muat / Perbarui Rekap 1 Tahun", type="primary", key="btn_yearly_sk"):
-                with st.spinner("Kalkulasi 12 Bulan..."):
-                    st.session_state[f"yearly_{my_class}"] = calculate_period_recap(my_class, months)
-                st.success("🎉 Rekap 1 Tahun diperbarui!")
-                
-            if f"yearly_{my_class}" in st.session_state:
-                st.dataframe(st.session_state[f"yearly_{my_class}"], use_container_width=True, hide_index=True)
+            with tab_rekap:
+                st.subheader(f"📊 Rekapitulasi Akumulasi 1 Tahun - Kelas {my_class}")
+                if st.button("🔄 Muat / Perbarui Rekap 1 Tahun", type="primary", key="btn_yearly_sk"):
+                    with st.spinner("Kalkulasi 12 Bulan..."):
+                        st.session_state[f"yearly_{my_class}"] = calculate_period_recap(my_class, months)
+                    st.success("🎉 Rekap 1 Tahun diperbarui!")
+                if f"yearly_{my_class}" in st.session_state:
+                    st.dataframe(st.session_state[f"yearly_{my_class}"], use_container_width=True, hide_index=True)
 
-        with tab_risk:
-            st.subheader(f"🛡️ Analisis Risiko Kedisiplinan Siswa - Kelas {my_class}")
-            if st.button("🔄 Hitung Matriks Risiko Kelas", type="primary", key="btn_risk_sk"):
-                with st.spinner("Mengkalkulasi tingkat risiko kedisiplinan siswa..."):
-                    st.session_state[f"risk_df_{my_class}"] = calculate_class_risk_table(my_class)
-                st.success("🎉 Matriks Risiko Diperbarui!")
-                
-            if f"risk_df_{my_class}" in st.session_state:
-                df_risk = st.session_state[f"risk_df_{my_class}"]
-                if not df_risk.empty:
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("🔴 Zona Merah (Bahaya)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA MERAH']))
-                    col2.metric("🟡 Zona Kuning (Waspada)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA KUNING']))
-                    col3.metric("🟢 Zona Hijau (Aman)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA HIJAU']))
-                    
-                    st.dataframe(df_risk.sort_values(by='Skor Poin', ascending=False), use_container_width=True)
-                    
-                    st.write("---")
-                    st.subheader("🤖 AI Narrative Evaluation Generator")
-                    selected_eval_student = st.selectbox("Pilih Siswa untuk Generasi Evaluasi AI:", df_risk['Nama Siswa'].tolist(), key="ai_eval_sk")
-                    
-                    if st.button("✨ Generasi Deskripsi Naratif AI"):
-                        s_row = df_risk[df_risk['Nama Siswa'] == selected_eval_student].iloc[0].to_dict()
-                        narrative_text = generate_ai_student_narrative(selected_eval_student, s_row)
-                        st.markdown(narrative_text)
-            else:
-                st.info("Klik tombol di atas untuk memuat analisis risiko kelas.")
+            with tab_risk:
+                st.subheader(f"🛡️ Analisis Risiko Kedisiplinan Siswa - Kelas {my_class}")
+                if st.button("🔄 Hitung Matriks Risiko Kelas", type="primary", key="btn_risk_sk"):
+                    with st.spinner("Mengkalkulasi tingkat risiko kedisiplinan siswa..."):
+                        st.session_state[f"risk_df_{my_class}"] = calculate_class_risk_table(my_class)
+                    st.success("🎉 Matriks Risiko Diperbarui!")
+                if f"risk_df_{my_class}" in st.session_state:
+                    df_risk = st.session_state[f"risk_df_{my_class}"]
+                    if not df_risk.empty:
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("🔴 Zona Merah (Bahaya)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA MERAH']))
+                        col2.metric("🟡 Zona Kuning (Waspada)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA KUNING']))
+                        col3.metric("🟢 Zona Hijau (Aman)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA HIJAU']))
+                        st.dataframe(df_risk.sort_values(by='Skor Poin', ascending=False), use_container_width=True)
+                        st.write("---")
+                        st.subheader("🤖 AI Narrative Evaluation Generator")
+                        selected_eval_student = st.selectbox("Pilih Siswa untuk Generasi Evaluasi AI:", df_risk['Nama Siswa'].tolist(), key="ai_eval_sk")
+                        if st.button("✨ Generasi Deskripsi Naratif AI"):
+                            s_row = df_risk[df_risk['Nama Siswa'] == selected_eval_student].iloc[0].to_dict()
+                            st.markdown(generate_ai_student_narrative(selected_eval_student, s_row))
+                else:
+                    st.info("Klik tombol di atas untuk memuat analisis risiko kelas.")
 
-        with tab_nama:
-            st.subheader(f"👥 Pengaturan Daftar Siswa Kelas {my_class}")
-            with st.expander("📥 📤 Import / Export Data Master Siswa (CSV / Excel)", expanded=False):
-                col_exp, col_imp = st.columns(2)
-                with col_exp:
-                    current_masters_list = get_master_students(my_class)
-                    df_export = pd.DataFrame(current_masters_list, columns=["Nama Siswa"])
-                    st.download_button(
-                        label=f"⬇️ Download CSV Master Kelas {my_class}",
-                        data=df_export.to_csv(index=False).encode('utf-8'),
-                        file_name=f"Master_Siswa_{my_class}.csv",
-                        mime="text/csv"
-                    )
-                with col_imp:
-                    uploaded_file = st.file_uploader(f"Pilih file CSV/Excel untuk Kelas {my_class}:", type=["csv", "xlsx"])
-                    if uploaded_file is not None:
-                        try:
-                            df_imp = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
-                            imp_names = df_imp["Nama Siswa"].dropna().astype(str).str.strip().tolist() if "Nama Siswa" in df_imp.columns else df_imp.iloc[:, 0].dropna().astype(str).str.strip().tolist()
-                            imp_names = [n for n in imp_names if n not in ["", "nan", "None"]]
-                            st.success(f"Terdeteksi {len(imp_names)} siswa dari file.")
-                            if st.button("💾 Terapkan Data Import Ini", type="primary"):
-                                save_master_students(my_class, imp_names)
-                                st.success("🎉 Data master berhasil diperbarui!")
-                                st.rerun()
-                        except Exception as ex_err:
-                            st.error(f"❌ Gagal membaca file: {ex_err}")
-            
-            st.write("---")
-            st.markdown("##### ✏️ Edit Manual Nama Siswa")
-            current_masters = get_master_students(my_class)
-            edited_masters = st.data_editor(
-                pd.DataFrame(current_masters, columns=["Nama Siswa"]),
-                num_rows="dynamic",
-                use_container_width=True,
-                key=f"master_edit_{my_class}"
-            )
-            if st.button("💾 Terapkan Perubahan Nama", type="primary"):
-                new_names = edited_masters["Nama Siswa"].dropna().tolist()
-                save_master_students(my_class, new_names)
-                st.success("🎉 Daftar nama berhasil diselaraskan!")
-                st.rerun()
+            with tab_nama:
+                st.subheader(f"👥 Pengaturan Daftar Siswa Kelas {my_class}")
+                with st.expander("📥 📤 Import / Export Data Master Siswa (CSV / Excel)", expanded=False):
+                    col_exp, col_imp = st.columns(2)
+                    with col_exp:
+                        current_masters_list = get_master_students(my_class)
+                        df_export = pd.DataFrame(current_masters_list, columns=["Nama Siswa"])
+                        st.download_button(label=f"⬇️ Download CSV Master Kelas {my_class}", data=df_export.to_csv(index=False).encode('utf-8'), file_name=f"Master_Siswa_{my_class}.csv", mime="text/csv")
+                    with col_imp:
+                        uploaded_file = st.file_uploader(f"Pilih file CSV/Excel untuk Kelas {my_class}:", type=["csv", "xlsx"])
+                        if uploaded_file is not None:
+                            try:
+                                df_imp = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
+                                imp_names = df_imp["Nama Siswa"].dropna().astype(str).str.strip().tolist() if "Nama Siswa" in df_imp.columns else df_imp.iloc[:, 0].dropna().astype(str).str.strip().tolist()
+                                imp_names = [n for n in imp_names if n not in ["", "nan", "None"]]
+                                st.success(f"Terdeteksi {len(imp_names)} siswa dari file.")
+                                if st.button("💾 Terapkan Data Import Ini", type="primary"):
+                                    save_master_students(my_class, imp_names)
+                                    st.success("🎉 Data master berhasil diperbarui!")
+                                    st.rerun()
+                            except Exception as ex_err:
+                                st.error(f"❌ Gagal membaca file: {ex_err}")
+                st.write("---")
+                st.markdown("##### ✏️ Edit Manual Nama Siswa")
+                current_masters = get_master_students(my_class)
+                edited_masters = st.data_editor(pd.DataFrame(current_masters, columns=["Nama Siswa"]), num_rows="dynamic", use_container_width=True, key=f"master_edit_{my_class}")
+                if st.button("💾 Terapkan Perubahan Nama", type="primary"):
+                    new_names = edited_masters["Nama Siswa"].dropna().tolist()
+                    save_master_students(my_class, new_names)
+                    st.success("🎉 Daftar nama berhasil diselaraskan!")
+                    st.rerun()
 
     # 2. GURU PIKET
     elif st.session_state.user_role == "Guru Piket / Pelajaran":
         st.title("🕵️‍♂️ Modul Guru Piket & Pelajaran")
         tab_piket_input, tab_flagging = st.tabs(["⏱️ Input Presensi & Keterlambatan", "🚩 Fitur Flagging Perilaku"])
-        
         with tab_piket_input:
             col_p1, col_p2, col_p3 = st.columns(3)
             with col_p1: p_class = st.selectbox("Pilih Kelas:", classes, key="piket_c")
             with col_p2: p_month = st.selectbox("Pilih Bulan:", months, key="piket_m")
             with col_p3: p_date = st.date_input("Tanggal Transaksi:", datetime.date.today())
-            
             students = get_master_students(p_class)
             if students:
                 with st.form("form_late"):
@@ -671,9 +622,7 @@ else:
                     if st.form_submit_button("💾 Catat Menit Terlambat"):
                         if save_lateness_entry(p_date, p_class, sel_student, late_min, "Guru Piket"):
                             st.success(f"Berhasil mencatat keterlambatan {late_min} menit untuk {sel_student}!")
-            else:
-                st.warning("Daftar siswa belum diisi di kelas ini.")
-                
+            else: st.warning("Daftar siswa belum diisi di kelas ini.")
         with tab_flagging:
             st.subheader("🚩 Form Flagging Perilaku Siswa")
             with st.form("form_flagging"):
@@ -683,7 +632,6 @@ else:
                 f_type = st.radio("Jenis Flagging:", ["POSITIF", "NEGATIF"], horizontal=True)
                 f_category = st.selectbox("Kategori Perilaku:", ["Ketertiban / Kerapihan", "Kedisiplinan Jam Pelajaran", "Prestasi / Kerjasama", "Pelanggaran Tata Tertib", "Bullying / Perkelahian", "Lainnya"])
                 f_catatan = st.text_area("Deskripsi Catatan Guru:")
-                
                 if st.form_submit_button("🚩 Kirim Flagging Perilaku"):
                     if f_student:
                         success, msg = save_flag_entry(datetime.date.today(), f_class, f_student, f_type, f_category, f_catatan, "Guru Piket")
@@ -694,56 +642,34 @@ else:
     elif st.session_state.user_role == "Guru BK":
         st.title("📊 Dashboard Eksekutif Bimbingan Konseling (BK)")
         target_c = st.selectbox("🎯 Pilih Kelas Pantauan Utama BK:", classes, key="bk_target_class")
+        tab_rekap_bk, tab_exec_risk, tab_counseling = st.tabs(["📊 Rekap & Agregasi Kedisiplinan", "🎯 Risk Scoring & Grafik Tren AI", "📝 Modul Pemanggilan & Konseling BK"])
         
-        tab_rekap_bk, tab_exec_risk, tab_counseling = st.tabs([
-            "📊 Rekap & Agregasi Kedisiplinan", 
-            "🎯 Risk Scoring & Grafik Tren AI", 
-            "📝 Modul Pemanggilan & Konseling BK"
-        ])
-        
-        # --- TAB 1: REKAP & AGREGASI KEDISIPLINAN ---
         with tab_rekap_bk:
             st.subheader(f"📑 Rekap Harian, Bulanan & Flagging Guru - Kelas {target_c}")
-            
             df_lateness_all = fetch_lateness_logs()
             df_flags_all = fetch_flags()
-            
             c_late = df_lateness_all[df_lateness_all['Kelas'] == target_c] if not df_lateness_all.empty and 'Kelas' in df_lateness_all.columns else pd.DataFrame()
             c_flags = df_flags_all[df_flags_all['Kelas'] == target_c] if not df_flags_all.empty and 'Kelas' in df_flags_all.columns else pd.DataFrame()
-            
             col_bk1, col_bk2, col_bk3 = st.columns(3)
-            tot_late_min = c_late['Menit Terlambat'].astype(int).sum() if not c_late.empty else 0
-            tot_pos_flag = len(c_flags[c_flags['Tipe'] == 'POSITIF']) if not c_flags.empty else 0
-            tot_neg_flag = len(c_flags[c_flags['Tipe'] == 'NEGATIF']) if not c_flags.empty else 0
-            
-            col_bk1.metric("⏱️ Total Menit Terlambat Kelas", f"{tot_late_min} Menit")
-            col_bk2.metric("🚩 Catatan Perilaku Negatif", f"{tot_neg_flag} Kasus")
-            col_bk3.metric("✨ Catatan Perilaku Positif", f"{tot_pos_flag} Apresiasi")
-            
+            col_bk1.metric("⏱️ Total Menit Terlambat Kelas", f"{c_late['Menit Terlambat'].astype(int).sum() if not c_late.empty else 0} Menit")
+            col_bk2.metric("🚩 Catatan Perilaku Negatif", f"{len(c_flags[c_flags['Tipe'] == 'NEGATIF']) if not c_flags.empty else 0} Kasus")
+            col_bk3.metric("✨ Catatan Perilaku Positif", f"{len(c_flags[c_flags['Tipe'] == 'POSITIF']) if not c_flags.empty else 0} Apresiasi")
             st.write("---")
             col_df_l, col_df_f = st.columns(2)
             with col_df_l:
                 st.markdown("##### ⏱️ Riwayat Keterlambatan (Piket)")
-                if not c_late.empty:
-                    st.dataframe(c_late.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
-                else:
-                    st.info("Belum ada catatan keterlambatan untuk kelas ini.")
-                    
+                if not c_late.empty: st.dataframe(c_late.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
+                else: st.info("Belum ada catatan keterlambatan untuk kelas ini.")
             with col_df_f:
                 st.markdown("##### 🚩 Riwayat Catatan Perilaku Guru")
-                if not c_flags.empty:
-                    st.dataframe(c_flags.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
-                else:
-                    st.info("Belum ada riwayat flagging perilaku dari guru.")
+                if not c_flags.empty: st.dataframe(c_flags.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
+                else: st.info("Belum ada riwayat flagging perilaku dari guru.")
 
-        # --- TAB 2: RISK SCORING & GRAFIK TREN AI ---
         with tab_exec_risk:
             st.subheader(f"🛡️ Sistem Risk Scoring & Tren Kedisiplinan - Kelas {target_c}")
-            
             if st.button("🔄 Kalkulasi Matriks Risiko & Tren Terbaru", type="primary", key="btn_bk_calc_risk"):
                 with st.spinner("Mengkalkulasi tingkat risiko kedisiplinan & tren..."):
                     st.session_state[f"risk_bk_{target_c}"] = calculate_class_risk_table(target_c)
-                    
             if f"risk_bk_{target_c}" in st.session_state:
                 df_risk = st.session_state[f"risk_bk_{target_c}"]
                 if not df_risk.empty:
@@ -751,10 +677,8 @@ else:
                     c1.metric("🔴 Zona Merah (Bahaya)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA MERAH']))
                     c2.metric("🟡 Zona Kuning (Waspada)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA KUNING']))
                     c3.metric("🟢 Zona Hijau (Aman)", len(df_risk[df_risk['Zona Risiko'] == 'ZONA HIJAU']))
-                    
                     st.markdown("##### 📋 Matriks Poin Risiko Kedisiplinan Siswa")
                     st.dataframe(df_risk.sort_values(by='Skor Poin', ascending=False), use_container_width=True, hide_index=True)
-                    
                     st.write("---")
                     st.subheader("📈 Grafik Tren Kedisiplinan Kelas")
                     df_lateness_all = fetch_lateness_logs()
@@ -763,204 +687,130 @@ else:
                         if not c_late_trend.empty:
                             trend_summary = c_late_trend.groupby('Tanggal')['Menit Terlambat'].astype(int).sum().reset_index()
                             st.bar_chart(trend_summary.set_index('Tanggal'))
-                        else:
-                            st.caption("ℹ️ Belum ada tren grafik keterlambatan untuk kelas ini.")
-                    
+                        else: st.caption("ℹ️ Belum ada tren grafik keterlambatan untuk kelas ini.")
                     st.write("---")
                     st.subheader("🤖 Deskripsi Naratif Otomatis (AI Narrative Evaluation)")
                     selected_eval_student = st.selectbox("Pilih Siswa untuk Generasi Laporan AI:", df_risk['Nama Siswa'].tolist(), key="bk_ai_select")
-                    
                     if st.button("✨ Generasi Laporan Naratif AI"):
                         s_row = df_risk[df_risk['Nama Siswa'] == selected_eval_student].iloc[0].to_dict()
-                        narrative_text = generate_ai_student_narrative(selected_eval_student, s_row)
-                        st.markdown(narrative_text)
-            else:
-                st.info("Klik tombol di atas untuk memuat analisis risiko dan tren kelas.")
+                        st.markdown(generate_ai_student_narrative(selected_eval_student, s_row))
+            else: st.info("Klik tombol di atas untuk memuat analisis risiko dan tren kelas.")
 
-        # --- TAB 3: MODUL PEMANGGILAN & KONSELING BK ---
         with tab_counseling:
             st.subheader(f"📝 Modul Pemanggilan & Konseling Siswa - Kelas {target_c}")
             students = get_master_students(target_c)
-            
             counseling_col1, counseling_col2 = st.columns([1, 1])
-            
             with counseling_col1:
                 st.markdown("##### ➕ Form Input Wawancara / Sesi Konseling")
                 with st.form("form_bk_session"):
                     c_student = st.selectbox("Nama Siswa:", students) if students else None
                     c_date = st.date_input("Tanggal Sesi / Pemanggilan:", datetime.date.today())
-                    c_ringkasan = st.text_area("Ringkasan Hasil Wawancara / Keluhan / Pelanggaran:", placeholder="Jelaskan alasan pemanggilan & poin wawancara...")
-                    c_rekomendasi = st.text_area("Rekomendasi Tindakan / Komitmen Siswa:", placeholder="Hasil komitmen, tindakan disiplin, atau rencana tindak lanjut...")
+                    c_ringkasan = st.text_area("Ringkasan Hasil Wawancara / Keluhan / Pelanggaran:")
+                    c_rekomendasi = st.text_area("Rekomendasi Tindakan / Komitmen Siswa:")
                     c_status = st.selectbox("Penandatanganan / Status Penanganan:", ["OPEN", "IN_PROGRESS", "RESOLVED", "ESCALATED"])
-                    
                     if st.form_submit_button("💾 Simpan Record Konseling BK", type="primary"):
                         if c_student and c_ringkasan.strip():
                             if save_counseling_log(c_date, target_c, c_student, c_ringkasan, c_rekomendasi, c_status, "Guru BK"):
                                 st.success(f"🎉 Catatan konseling untuk {c_student} berhasil tersimpan!")
                                 st.rerun()
-                        else:
-                            st.error("❌ Nama Siswa dan Ringkasan Wawancara wajib diisi!")
-
+                        else: st.error("❌ Nama Siswa dan Ringkasan Wawancara wajib diisi!")
             with counseling_col2:
                 st.markdown("##### 📑 Riwayat Record Konseling Terdaftar")
                 df_counsel = fetch_counseling_logs()
                 if not df_counsel.empty and 'Kelas' in df_counsel.columns:
                     c_history = df_counsel[df_counsel['Kelas'] == target_c]
-                    if not c_history.empty:
-                        st.dataframe(c_history.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
-                    else:
-                        st.info("Belum ada riwayat konseling untuk kelas ini.")
-                else:
-                    st.info("Belum ada data konseling tersimpan di database.")
+                    if not c_history.empty: st.dataframe(c_history.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
+                    else: st.info("Belum ada riwayat konseling untuk kelas ini.")
+                else: st.info("Belum ada data konseling tersimpan di database.")
 
     # 4. KEPALA SEKOLAH (DASHBOARD MAKRO TINGKAT SEKOLAH)
     elif st.session_state.user_role == "Kepala Sekolah":
         st.title("🏛️ Dashboard Makro Kedisiplinan - Kepala Sekolah")
-        st.caption("Monitoring Makro Seluruh Kelas & Evaluasi Risiko Sekolah")
-        
         if st.button("🔄 Muat Data Eksekutif Makro Seluruh Kelas", type="primary"):
             with st.spinner("Mengagregasi data dari seluruh kelas di sekolah..."):
                 df_late_all = fetch_lateness_logs()
                 df_flags_all = fetch_flags()
-                macro_summary = []
-                all_red_students = []
-                
+                macro_summary, all_red_students = [], []
                 for c in classes:
                     c_risk_df = calculate_class_risk_table(c, df_late_all, df_flags_all)
                     red = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA MERAH'])
                     yellow = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA KUNING'])
                     green = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA HIJAU'])
-                    
-                    # Store Red Zone Students for Executive Table
                     red_df = c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA MERAH'].copy()
                     if not red_df.empty:
                         red_df['Kelas'] = c
                         all_red_students.append(red_df)
-                        
-                    macro_summary.append({
-                        'Kelas': c, 
-                        'Total Siswa': len(c_risk_df), 
-                        '🔴 Zona Merah': red, 
-                        '🟡 Zona Kuning': yellow, 
-                        '🟢 Zona Hijau': green
-                    })
-                    
+                    macro_summary.append({'Kelas': c, 'Total Siswa': len(c_risk_df), '🔴 Zona Merah': red, '🟡 Zona Kuning': yellow, '🟢 Zona Hijau': green})
                 st.session_state["macro_kepsek"] = pd.DataFrame(macro_summary)
                 st.session_state["macro_red_students"] = pd.concat(all_red_students, ignore_index=True) if all_red_students else pd.DataFrame()
 
         if "macro_kepsek" in st.session_state:
             df_macro = st.session_state["macro_kepsek"]
-            
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("🔴 Total Siswa Zona Merah", df_macro['🔴 Zona Merah'].sum())
             col2.metric("🟡 Total Siswa Zona Kuning", df_macro['🟡 Zona Kuning'].sum())
             col3.metric("🟢 Total Siswa Zona Hijau", df_macro['🟢 Zona Hijau'].sum())
             col4.metric("🏫 Total Kelas Terpantau", len(df_macro))
-            
             st.write("---")
             st.subheader("📊 Distribusi Risiko Kedisiplinan per Kelas")
             st.dataframe(df_macro, use_container_width=True, hide_index=True)
             st.bar_chart(df_macro.set_index('Kelas')[['🔴 Zona Merah', '🟡 Zona Kuning', '🟢 Zona Hijau']])
-            
             st.write("---")
             st.subheader("⚠️ Daftar Prioritas Siswa Zona Merah (Perlu Atensi Kepsek & BK)")
             if "macro_red_students" in st.session_state and not st.session_state["macro_red_students"].empty:
                 df_red = st.session_state["macro_red_students"]
                 cols_order = ['Kelas', 'Nama Siswa', 'Skor Poin', 'Alpa (Hari)', 'Terlambat (Menit)', 'Flag Negatif']
                 st.dataframe(df_red[cols_order].sort_values(by='Skor Poin', ascending=False), use_container_width=True, hide_index=True)
-            else:
-                st.success("🎉 Tidak ada siswa dalam Zona Merah di seluruh kelas!")
-        else:
-            st.info("Klik tombol di atas untuk memuat laporan makro tingkat sekolah.")
+            else: st.success("🎉 Tidak ada siswa dalam Zona Merah di seluruh kelas!")
+        else: st.info("Klik tombol di atas untuk memuat laporan makro tingkat sekolah.")
 
     # 5. ADMIN SYSTEM (MANAGEMENT HUB)
     elif st.session_state.user_role in ["Admin", "Administrator System"]:
         st.title("🛠️ Pusat Pengaturan Administrator System")
         tab_pass, tab_master_all = st.tabs(["🔐 Kelola Pengguna (CRUD)", "👥 Kelola Data Master Siswa (CRUD & I/O)"])
         
-        # --- TAB 1: KELOLA PENGGUNA (CRUD) ---
         with tab_pass:
             st.subheader("🔐 Manajemen Akun Pengguna & Akses Hak Masuk")
-            st.caption("Kelola hak akses, tambah pengguna baru, perbarui password, atau hapus akun pengguna.")
-            
             passwords = fetch_config_passwords()
-            
             col_add_user, col_edit_user = st.columns([1, 2])
-            
-            # Create User Form
             with col_add_user:
                 with st.expander("➕ Tambah Pengguna Baru", expanded=True):
                     with st.form("form_add_user"):
-                        new_key = st.text_input("Nama Pengguna / Role Key (Contoh: '7A', 'Admin'):")
+                        new_key = st.text_input("Nama Pengguna / Role Key:")
                         new_pass = st.text_input("Password Baru:", type="password")
                         if st.form_submit_button("➕ Tambah Akun", type="primary"):
-                            if not new_key or not new_pass:
-                                st.error("❌ Nama pengguna dan password wajib diisi!")
-                            elif new_key in passwords:
-                                st.warning(f"⚠️ Pengguna '{new_key}' sudah ada.")
+                            if not new_key or not new_pass: st.error("❌ Nama pengguna dan password wajib diisi!")
+                            elif new_key in passwords: st.warning(f"⚠️ Pengguna '{new_key}' sudah ada.")
                             else:
                                 passwords[new_key] = new_pass
                                 save_config_passwords(passwords)
                                 st.success(f"🎉 Akun '{new_key}' berhasil ditambahkan!")
                                 st.rerun()
-            
-            # Read, Update & Delete Users Grid
             with col_edit_user:
                 st.markdown("##### 📋 Daftar Akun Pengguna (Edit Password & Hapus)")
-                st.caption("Ubah kata sandi langsung pada tabel, atau hapus baris untuk menghapus pengguna.")
                 config_df = pd.DataFrame(list(passwords.items()), columns=['Key', 'Password'])
-                
-                edited_config = st.data_editor(
-                    config_df, 
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    key="editor_users"
-                )
-                
+                edited_config = st.data_editor(config_df, num_rows="dynamic", use_container_width=True, key="editor_users")
                 if st.button("💾 Simpan Perubahan Pengguna", type="primary"):
                     valid_rows = edited_config.dropna(subset=['Key'])
-                    new_pass_dict = dict(zip(valid_rows['Key'].astype(str).str.strip(), valid_rows['Password'].astype(str).str.strip()))
-                    new_pass_dict = {k: v for k, v in new_pass_dict.items() if k != ""}
+                    new_pass_dict = {k: v for k, v in dict(zip(valid_rows['Key'].astype(str).str.strip(), valid_rows['Password'].astype(str).str.strip())).items() if k != ""}
                     save_config_passwords(new_pass_dict)
                     st.success("🔒 Data pengguna & password berhasil diperbarui!")
                     st.rerun()
 
-        # --- TAB 2: KELOLA MASTER SISWA (CRUD & IMPORT/EXPORT) ---
         with tab_master_all:
             st.subheader("👥 Kelola Master Data Siswa Pusat")
-            st.caption("Modul Administrator untuk mengelola seluruh data master siswa (CRUD), serta Export/Import batch gabungan.")
-            
-            admin_siswa_tab1, admin_siswa_tab2, admin_siswa_tab3 = st.tabs([
-                "📝 Grid Editor Master Siswa", 
-                "➕ Single Form Add/Remove",
-                "📦 Export & Import Batch Master"
-            ])
-            
+            admin_siswa_tab1, admin_siswa_tab2, admin_siswa_tab3 = st.tabs(["📝 Grid Editor Master Siswa", "➕ Single Form Add/Remove", "📦 Export & Import Batch Master"])
             df_all_master = fetch_all_master_df()
-            
-            # 1. Dynamic Grid Editor (Read, Update, Dynamic Add/Delete)
             with admin_siswa_tab1:
                 st.markdown("##### ✏️ Master Siswa Grid Editor (Seluruh Kelas)")
-                st.info("💡 Anda dapat menambah, mengubah nama, atau menghapus baris siswa pada tabel seluruh kelas di bawah ini.")
-                
-                edited_master = st.data_editor(
-                    df_all_master,
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    key="admin_editor_master"
-                )
-                
+                edited_master = st.data_editor(df_all_master, num_rows="dynamic", use_container_width=True, key="admin_editor_master")
                 if st.button("💾 Simpan Perubahan Master Siswa", type="primary", key="btn_save_all_master"):
                     with st.spinner("Menyimpan seluruh data master ke database..."):
                         save_all_master_df(edited_master)
                     st.success("🎉 Database Master Siswa berhasil diperbarui!")
                     st.rerun()
-
-            # 2. Single CRUD Forms
             with admin_siswa_tab2:
                 col_c1, col_c2 = st.columns(2)
-                
-                # Create Student
                 with col_c1:
                     with st.expander("➕ Tambah Siswa Baru ke Kelas", expanded=True):
                         with st.form("form_admin_add_siswa"):
@@ -969,17 +819,13 @@ else:
                             if st.form_submit_button("➕ Tambahkan Siswa"):
                                 if new_s_name.strip():
                                     current_list = get_master_students(target_c)
-                                    if new_s_name.strip() in current_list:
-                                        st.warning("⚠️ Nama siswa sudah ada di kelas tersebut.")
+                                    if new_s_name.strip() in current_list: st.warning("⚠️ Nama siswa sudah ada di kelas tersebut.")
                                     else:
                                         current_list.append(new_s_name.strip())
                                         save_master_students(target_c, current_list)
                                         st.success(f"🎉 Siswa '{new_s_name}' berhasil ditambahkan ke kelas {target_c}!")
                                         st.rerun()
-                                else:
-                                    st.error("Nama siswa tidak boleh kosong!")
-
-                # Delete Student
+                                else: st.error("Nama siswa tidak boleh kosong!")
                 with col_c2:
                     with st.expander("🗑️ Hapus Siswa dari Kelas", expanded=True):
                         with st.form("form_admin_del_siswa"):
@@ -992,43 +838,20 @@ else:
                                     save_master_students(target_del_c, updated_list)
                                     st.success(f"🎉 Siswa '{siswa_to_del}' berhasil dihapus dari kelas {target_del_c}!")
                                     st.rerun()
-                                else:
-                                    st.error("Tidak ada siswa untuk dihapus pada kelas ini.")
-
-            # 3. Batch Import / Export
+                                else: st.error("Tidak ada siswa untuk dihapus pada kelas ini.")
             with admin_siswa_tab3:
                 st.markdown("##### 📦 Batch Import & Export Data Master")
                 exp_col, imp_col = st.columns(2)
-                
-                # Export Section
                 with exp_col:
-                    st.markdown("### 📤 Export Master Data")
                     exp_mode = st.radio("Pilih Mode Export:", ["Seluruh Kelas (Full Matrix)", "Per Kelas Spesifik"])
-                    
                     if exp_mode == "Seluruh Kelas (Full Matrix)":
-                        st.download_button(
-                            label="⬇️ Download Full Master Data (CSV)",
-                            data=df_all_master.to_csv(index=False).encode('utf-8'),
-                            file_name="Master_Siswa_All_Classes.csv",
-                            mime="text/csv",
-                            type="primary"
-                        )
+                        st.download_button(label="⬇️ Download Full Master Data (CSV)", data=df_all_master.to_csv(index=False).encode('utf-8'), file_name="Master_Siswa_All_Classes.csv", mime="text/csv", type="primary")
                     else:
                         selected_exp_c = st.selectbox("Pilih Kelas yang Diexport:", classes, key="sel_exp_c")
-                        c_list = get_master_students(selected_exp_c)
-                        df_c_exp = pd.DataFrame(c_list, columns=["Nama Siswa"])
-                        st.download_button(
-                            label=f"⬇️ Download Master Kelas {selected_exp_c} (CSV)",
-                            data=df_c_exp.to_csv(index=False).encode('utf-8'),
-                            file_name=f"Master_Siswa_{selected_exp_c}.csv",
-                            mime="text/csv"
-                        )
-
-                # Import Section
+                        df_c_exp = pd.DataFrame(get_master_students(selected_exp_c), columns=["Nama Siswa"])
+                        st.download_button(label=f"⬇️ Download Master Kelas {selected_exp_c} (CSV)", data=df_c_exp.to_csv(index=False).encode('utf-8'), file_name=f"Master_Siswa_{selected_exp_c}.csv", mime="text/csv")
                 with imp_col:
-                    st.markdown("### 📥 Import Master Data")
                     imp_mode = st.radio("Pilih Mode Import:", ["Import per Kelas", "Import Full Matrix (Banyak Kelas)"])
-                    
                     if imp_mode == "Import per Kelas":
                         target_imp_c = st.selectbox("Pilih Kelas Target Import:", classes, key="sel_imp_c")
                         up_file_c = st.file_uploader(f"Upload CSV/Excel untuk Kelas {target_imp_c}:", type=["csv", "xlsx"], key="up_c")
@@ -1037,15 +860,13 @@ else:
                                 df_imp = pd.read_csv(up_file_c) if up_file_c.name.endswith(".csv") else pd.read_excel(up_file_c)
                                 imp_names = df_imp["Nama Siswa"].dropna().astype(str).str.strip().tolist() if "Nama Siswa" in df_imp.columns else df_imp.iloc[:, 0].dropna().astype(str).str.strip().tolist()
                                 imp_names = [n for n in imp_names if n not in ["", "nan", "None"]]
-                                st.success(f"Terdeteksi {len(imp_names)} siswa.")
                                 if st.button(f"💾 Terapkan Import Kelas {target_imp_c}", type="primary"):
                                     save_master_students(target_imp_c, imp_names)
                                     st.success(f"🎉 Master Siswa Kelas {target_imp_c} berhasil diperbarui!")
                                     st.rerun()
-                            except Exception as ex:
-                                st.error(f"❌ Error membaca file: {ex}")
+                            except Exception as ex: st.error(f"❌ Error membaca file: {ex}")
                     else:
-                        up_file_full = st.file_uploader("Upload CSV/Excel Full Matrix (Nama Kolom = Kelas):", type=["csv", "xlsx"], key="up_full")
+                        up_file_full = st.file_uploader("Upload CSV/Excel Full Matrix:", type=["csv", "xlsx"], key="up_full")
                         if up_file_full is not None:
                             try:
                                 df_imp_full = pd.read_csv(up_file_full) if up_file_full.name.endswith(".csv") else pd.read_excel(up_file_full)
@@ -1054,5 +875,4 @@ else:
                                     save_all_master_df(df_imp_full)
                                     st.success("🎉 Database Master Siswa Seluruh Kelas berhasil diperbarui!")
                                     st.rerun()
-                            except Exception as ex:
-                                st.error(f"❌ Error membaca file: {ex}")
+                            except Exception as ex: st.error(f"❌ Error membaca file: {ex}")
