@@ -746,52 +746,121 @@ else:
                     else: st.info("Belum ada riwayat konseling untuk kelas ini.")
                 else: st.info("Belum ada data konseling tersimpan di database.")
 
-    # 4. KEPALA SEKOLAH (DIOPTIMASI UNTUK EKSEKUSI CEPAT)
+# 4. KEPALA SEKOLAH (DIOPTIMASI UNTUK EKSEKUSI CEPAT)
     elif st.session_state.user_role == "Kepala Sekolah":
-        st.title("🏛️ Dashboard Makro Kedisiplinan - Kepala Sekolah")
-        if st.button("🔄 Muat Data Eksekutif Makro Seluruh Kelas", type="primary"):
-            with st.spinner("Mengagregasi data dari seluruh kelas di sekolah..."):
-                df_late_all = fetch_lateness_logs()
-                df_flags_all = fetch_flags()
-                
-                # Mengambil daftar sheet hanya 1 kali
-                existing_sheets = get_existing_worksheet_names()
-                
-                macro_summary, all_red_students = [], []
-                for c in classes:
-                    c_risk_df = calculate_class_risk_table(c, df_late_all, df_flags_all, existing_sheets)
-                    red = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA MERAH'])
-                    yellow = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA KUNING'])
-                    green = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA HIJAU'])
-                    red_df = c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA MERAH'].copy()
-                    if not red_df.empty:
-                        red_df['Kelas'] = c
-                        all_red_students.append(red_df)
-                    macro_summary.append({'Kelas': c, 'Total Siswa': len(c_risk_df), '🔴 Zona Merah': red, '🟡 Zona Kuning': yellow, '🟢 Zona Hijau': green})
-                
-                st.session_state["macro_kepsek"] = pd.DataFrame(macro_summary)
-                st.session_state["macro_red_students"] = pd.concat(all_red_students, ignore_index=True) if all_red_students else pd.DataFrame()
+        st.title("🏛️ Dashboard Makro Eksekutif - Kepala Sekolah")
+        
+        tab_kepsek_risk, tab_kepsek_absen = st.tabs(["🛡️ Makro Kedisiplinan (Risiko)", "📊 Makro Kehadiran (Semester & Tahunan)"])
+        
+        # --- TAB 1: MAKRO KEDISIPLINAN (KODE EKSISTING) ---
+        with tab_kepsek_risk:
+            st.subheader("🛡️ Agregasi Zona Risiko Kedisiplinan")
+            if st.button("🔄 Muat Data Eksekutif Makro Seluruh Kelas", type="primary", key="btn_kepsek_risk"):
+                with st.spinner("Mengagregasi data dari seluruh kelas di sekolah..."):
+                    df_late_all = fetch_lateness_logs()
+                    df_flags_all = fetch_flags()
+                    
+                    # Mengambil daftar sheet hanya 1 kali
+                    existing_sheets = get_existing_worksheet_names()
+                    
+                    macro_summary, all_red_students = [], []
+                    for c in classes:
+                        c_risk_df = calculate_class_risk_table(c, df_late_all, df_flags_all, existing_sheets)
+                        red = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA MERAH'])
+                        yellow = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA KUNING'])
+                        green = len(c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA HIJAU'])
+                        red_df = c_risk_df[c_risk_df['Zona Risiko'] == 'ZONA MERAH'].copy()
+                        if not red_df.empty:
+                            red_df['Kelas'] = c
+                            all_red_students.append(red_df)
+                        macro_summary.append({'Kelas': c, 'Total Siswa': len(c_risk_df), '🔴 Zona Merah': red, '🟡 Zona Kuning': yellow, '🟢 Zona Hijau': green})
+                    
+                    st.session_state["macro_kepsek"] = pd.DataFrame(macro_summary)
+                    st.session_state["macro_red_students"] = pd.concat(all_red_students, ignore_index=True) if all_red_students else pd.DataFrame()
 
-        if "macro_kepsek" in st.session_state:
-            df_macro = st.session_state["macro_kepsek"]
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("🔴 Total Siswa Zona Merah", df_macro['🔴 Zona Merah'].sum())
-            col2.metric("🟡 Total Siswa Zona Kuning", df_macro['🟡 Zona Kuning'].sum())
-            col3.metric("🟢 Total Siswa Zona Hijau", df_macro['🟢 Zona Hijau'].sum())
-            col4.metric("🏫 Total Kelas Terpantau", len(df_macro))
-            st.write("---")
-            st.subheader("📊 Distribusi Risiko Kedisiplinan per Kelas")
-            st.dataframe(df_macro, use_container_width=True, hide_index=True)
-            st.bar_chart(df_macro.set_index('Kelas')[['🔴 Zona Merah', '🟡 Zona Kuning', '🟢 Zona Hijau']])
-            st.write("---")
-            st.subheader("⚠️ Daftar Prioritas Siswa Zona Merah (Perlu Atensi Kepsek & BK)")
-            if "macro_red_students" in st.session_state and not st.session_state["macro_red_students"].empty:
-                df_red = st.session_state["macro_red_students"]
-                cols_order = ['Kelas', 'Nama Siswa', 'Skor Poin', 'Alpa (Hari)', 'Terlambat (Menit)', 'Flag Negatif']
-                st.dataframe(df_red[cols_order].sort_values(by='Skor Poin', ascending=False), use_container_width=True, hide_index=True)
-            else: st.success("🎉 Tidak ada siswa dalam Zona Merah di seluruh kelas!")
-        else: st.info("Klik tombol di atas untuk memuat laporan makro tingkat sekolah.")
+            if "macro_kepsek" in st.session_state:
+                df_macro = st.session_state["macro_kepsek"]
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("🔴 Total Siswa Zona Merah", df_macro['🔴 Zona Merah'].sum())
+                col2.metric("🟡 Total Siswa Zona Kuning", df_macro['🟡 Zona Kuning'].sum())
+                col3.metric("🟢 Total Siswa Zona Hijau", df_macro['🟢 Zona Hijau'].sum())
+                col4.metric("🏫 Total Kelas Terpantau", len(df_macro))
+                st.write("---")
+                st.subheader("📊 Distribusi Risiko Kedisiplinan per Kelas")
+                st.dataframe(df_macro, use_container_width=True, hide_index=True)
+                st.bar_chart(df_macro.set_index('Kelas')[['🔴 Zona Merah', '🟡 Zona Kuning', '🟢 Zona Hijau']])
+                st.write("---")
+                st.subheader("⚠️ Daftar Prioritas Siswa Zona Merah (Perlu Atensi Kepsek & BK)")
+                if "macro_red_students" in st.session_state and not st.session_state["macro_red_students"].empty:
+                    df_red = st.session_state["macro_red_students"]
+                    cols_order = ['Kelas', 'Nama Siswa', 'Skor Poin', 'Alpa (Hari)', 'Terlambat (Menit)', 'Flag Negatif']
+                    st.dataframe(df_red[cols_order].sort_values(by='Skor Poin', ascending=False), use_container_width=True, hide_index=True)
+                else: st.success("🎉 Tidak ada siswa dalam Zona Merah di seluruh kelas!")
+            else: st.info("Klik tombol di atas untuk memuat laporan risiko tingkat sekolah.")
 
+        # --- TAB 2: MAKRO KEHADIRAN (FITUR BARU) ---
+        with tab_kepsek_absen:
+            st.subheader("📊 Rekapitulasi Kehadiran Makro Seluruh Kelas")
+            
+            col_opt1, col_opt2 = st.columns([1, 2])
+            with col_opt1:
+                periode_pilihan = st.selectbox("📅 Pilih Periode Laporan:", ["Semester Ganjil", "Semester Genap", "Full 1 Tahun"])
+            
+            if st.button("🔄 Kalkulasi Rekap Kehadiran", type="primary", key="btn_kepsek_absen"):
+                with st.spinner(f"Menarik & mengkalkulasi data kehadiran {periode_pilihan} dari seluruh kelas..."):
+                    # Tentukan target bulan berdasarkan pilihan
+                    if periode_pilihan == "Semester Ganjil": target_months = ganjil_months
+                    elif periode_pilihan == "Semester Genap": target_months = genap_months
+                    else: target_months = months
+
+                    existing_sheets = get_existing_worksheet_names()
+                    macro_attendance = []
+
+                    for c in classes:
+                        c_s, c_i, c_a, c_h = 0, 0, 0, 0
+                        for m in target_months:
+                            sheet_name = f"{c}_{m}"
+                            # Jika sheet bulan kelas tersebut belum dibuat, lewati untuk cegah error API
+                            if sheet_name not in existing_sheets:
+                                continue
+                            
+                            df_m = fetch_attendance_data_from_cache(c, m)
+                            rep_m = generate_full_report(df_m)
+                            
+                            # Menjumlahkan total S, I, A, H untuk kelas tersebut pada bulan ini
+                            c_s += rep_m['S'].sum()
+                            c_i += rep_m['I'].sum()
+                            c_a += rep_m['A'].sum()
+                            c_h += rep_m['Hadir'].sum()
+                        
+                        tot = c_s + c_i + c_a + c_h
+                        macro_attendance.append({
+                            'Kelas': c,
+                            'Sakit (S)': c_s,
+                            'Izin (I)': c_i,
+                            'Alpha (A)': c_a,
+                            'Total Hadir (H)': c_h,
+                            'Total Hari Efektif': tot,
+                            '% Hadir': f"{(c_h / tot * 100):.1f}%" if tot > 0 else "0%",
+                            '% Izin': f"{(c_i / tot * 100):.1f}%" if tot > 0 else "0%",
+                            '% Alpha': f"{(c_a / tot * 100):.1f}%" if tot > 0 else "0%",
+                            '% Sakit': f"{(c_s / tot * 100):.1f}%" if tot > 0 else "0%"
+                        })
+                    
+                    st.session_state["macro_absensi"] = pd.DataFrame(macro_attendance)
+
+            if "macro_absensi" in st.session_state:
+                df_macro_absen = st.session_state["macro_absensi"]
+                st.dataframe(df_macro_absen, use_container_width=True, hide_index=True)
+                
+                st.write("---")
+                st.subheader("📈 Visualisasi Tingkat Kehadiran per Kelas")
+                # Membuat bar chart sederhana untuk persentase kehadiran
+                chart_data = df_macro_absen[['Kelas', '% Hadir']].copy()
+                chart_data['% Hadir'] = chart_data['% Hadir'].str.rstrip('%').astype(float)
+                st.bar_chart(chart_data.set_index('Kelas'))
+            else:
+                st.info("Pilih periode dan klik tombol kalkulasi untuk memuat data absensi makro.")
     # 5. ADMIN SYSTEM
     elif st.session_state.user_role in ["Admin", "Administrator System"]:
         st.title("🛠️ Pusat Pengaturan Administrator System")
