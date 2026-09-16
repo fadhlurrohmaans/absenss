@@ -153,7 +153,7 @@ def fetch_sheet_with_retry(sheet_name):
             return pd.DataFrame()
     return pd.DataFrame()
 
-# --- FITUR BARU: MANAJEMEN KONTAK WHATSAPP ---
+# --- FITUR MANAJEMEN KONTAK WHATSAPP ---
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_wa_contacts():
     df = fetch_sheet_with_retry("KONTAK_WA")
@@ -166,9 +166,9 @@ def update_wa_contact(kelas, nama, no_wa):
     mask = (df['Kelas'] == kelas) & (df['Nama Siswa'] == nama)
     
     if mask.any():
-        df.loc[mask, 'No WA'] = no_wa
+        df.loc[mask, 'No WA'] = str(no_wa)
     else:
-        new_row = pd.DataFrame([{'Kelas': kelas, 'Nama Siswa': nama, 'No WA': no_wa}])
+        new_row = pd.DataFrame([{'Kelas': kelas, 'Nama Siswa': nama, 'No WA': str(no_wa)}])
         df = pd.concat([df, new_row], ignore_index=True)
     
     try:
@@ -179,6 +179,36 @@ def update_wa_contact(kelas, nama, no_wa):
         
     execute_write_with_retry(ws.clear)
     execute_write_with_retry(ws.update, range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+    fetch_wa_contacts.clear()
+    fetch_sheet_with_retry.clear("KONTAK_WA")
+    return True
+
+def save_class_wa_contacts(kelas, df_class_wa):
+    """Menyimpan seluruh nomor WA siswa dalam satu kelas sekaligus"""
+    df_all = fetch_wa_contacts()
+    
+    if not df_all.empty and 'Kelas' in df_all.columns:
+        df_other = df_all[df_all['Kelas'] != kelas].copy()
+    else:
+        df_other = pd.DataFrame(columns=['Kelas', 'Nama Siswa', 'No WA'])
+        
+    df_class_wa = df_class_wa.copy()
+    df_class_wa['Kelas'] = kelas
+    df_class_wa['Nama Siswa'] = df_class_wa['Nama Siswa'].astype(str).str.strip()
+    df_class_wa['No WA'] = df_class_wa['No WA'].astype(str).str.strip()
+    df_class_wa = df_class_wa[['Kelas', 'Nama Siswa', 'No WA']]
+    df_class_wa = df_class_wa[df_class_wa['Nama Siswa'] != ""]
+    
+    df_updated = pd.concat([df_other, df_class_wa], ignore_index=True)
+    
+    try:
+        ws = sh.worksheet("KONTAK_WA")
+    except WorksheetNotFound:
+        ws = execute_write_with_retry(sh.add_worksheet, "KONTAK_WA", rows="1000", cols="5")
+        get_existing_worksheet_names.clear()
+        
+    execute_write_with_retry(ws.clear)
+    execute_write_with_retry(ws.update, range_name='A1', values=[df_updated.columns.values.tolist()] + df_updated.values.tolist())
     fetch_wa_contacts.clear()
     fetch_sheet_with_retry.clear("KONTAK_WA")
     return True
@@ -664,7 +694,7 @@ else:
                 "🌸 Rekap Semester Genap",
                 "📊 Rekap 1 Tahun",
                 "🎯 Matriks Risk Scoring & AI",
-                "👥 Kelola Master Siswa"
+                "👥 Kelola Master Siswa & Kontak WA"
             ])
             tab_absen, tab_ganjil, tab_genap, tab_rekap, tab_risk, tab_nama = tabs
         elif st.session_state.user_role == "Sekretaris Kelas":
@@ -768,13 +798,19 @@ else:
                     st.info("Klik tombol di atas untuk memuat analisis risiko kelas.")
 
             with tab_nama:
-                st.subheader(f"👥 Pengaturan Daftar Siswa Kelas {my_class}")
+                st.subheader(f"👥 Pengaturan Daftar Siswa & Kontak WA Orang Tua Kelas {my_class}")
+                
                 with st.expander("📥 📤 Import / Export Data Master Siswa (CSV / Excel)", expanded=False):
                     col_exp, col_imp = st.columns(2)
                     with col_exp:
                         current_masters_list = get_master_students(my_class)
                         df_export = pd.DataFrame(current_masters_list, columns=["Nama Siswa"])
-                        st.download_button(label=f"⬇️ Download CSV Master Kelas {my_class}", data=df_export.to_csv(index=False).encode('utf-8'), file_name=f"Master_Siswa_{my_class}.csv", mime="text/csv")
+                        st.download_button(
+                            label=f"⬇️ Download CSV Master Kelas {my_class}", 
+                            data=df_export.to_csv(index=False).encode('utf-8'), 
+                            file_name=f"Master_Siswa_{my_class}.csv", 
+                            mime="text/csv"
+                        )
                     with col_imp:
                         uploaded_file = st.file_uploader(f"Pilih file CSV/Excel untuk Kelas {my_class}:", type=["csv", "xlsx"])
                         if uploaded_file is not None:
@@ -789,23 +825,55 @@ else:
                                     st.rerun()
                             except Exception as ex_err:
                                 st.error(f"❌ Gagal membaca file: {ex_err}")
-                st.write("---")
-                st.markdown("##### ✏️ Edit Manual Nama Siswa")
-                current_masters = get_master_students(my_class)
-                edited_masters = st.data_editor(pd.DataFrame(current_masters, columns=["Nama Siswa"]), num_rows="dynamic", use_container_width=True, key=f"master_edit_{my_class}")
-                if st.button("💾 Terapkan Perubahan Nama", type="primary"):
-                    new_names = edited_masters["Nama Siswa"].dropna().tolist()
-                    save_master_students(my_class, new_names)
-                    st.success("🎉 Daftar nama berhasil diselaraskan!")
-                    st.rerun()
                 
-                # Integrasi Database WA ke Wali Kelas
                 st.write("---")
-                st.subheader("📱 Manajemen Kontak WhatsApp Orang Tua")
+                st.markdown("##### ✏️ Edit Manual Nama Siswa & Nomor WA Orang Tua")
+                st.caption("Wali Kelas dapat mengedit nama siswa serta menambah/mengubah Nomor WA Orang Tua secara langsung pada tabel di bawah ini.")
+                
+                # Fetch Current Master & WA Contacts
+                current_masters = get_master_students(my_class)
                 wa_df = fetch_wa_contacts()
                 wa_kelas = wa_df[wa_df['Kelas'] == my_class] if not wa_df.empty else pd.DataFrame(columns=['Kelas', 'Nama Siswa', 'No WA'])
-                render_paginated_dataframe(wa_kelas, key_prefix=f"wa_kelas_{my_class}")
-                st.caption("*Kontak WhatsApp otomatis tertambah apabila Guru Piket mencatat nomor baru di form keterlambatan.")
+                
+                wa_map = dict(zip(wa_kelas['Nama Siswa'].astype(str).str.strip(), wa_kelas['No WA'].astype(str).str.strip())) if not wa_kelas.empty else {}
+                
+                master_wa_data = []
+                for sname in current_masters:
+                    master_wa_data.append({
+                        "Nama Siswa": sname,
+                        "No WA": wa_map.get(sname, "")
+                    })
+                
+                df_editor_input = pd.DataFrame(master_wa_data if master_wa_data else [{"Nama Siswa": "", "No WA": ""}])
+                
+                edited_masters_wa = st.data_editor(
+                    df_editor_input,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    column_config={
+                        "Nama Siswa": st.column_config.TextColumn("Nama Lengkap Siswa", required=True),
+                        "No WA": st.column_config.TextColumn("Nomor WA Orang Tua (Contoh: 08123456789)")
+                    },
+                    key=f"master_wa_edit_{my_class}"
+                )
+                
+                if st.button("💾 Simpan Perubahan Siswa & Kontak WA", type="primary"):
+                    valid_rows = edited_masters_wa.dropna(subset=["Nama Siswa"])
+                    new_names = [str(n).strip() for n in valid_rows["Nama Siswa"].tolist() if str(n).strip() != ""]
+                    
+                    with st.spinner("Menyimpan data master siswa & kontak WA ke cloud..."):
+                        save_master_students(my_class, new_names)
+                        save_class_wa_contacts(my_class, valid_rows[["Nama Siswa", "No WA"]])
+                    
+                    st.success("🎉 Daftar nama siswa dan kontak WhatsApp orang tua berhasil disimpan!")
+                    st.rerun()
+                
+                st.write("---")
+                st.subheader("📱 Ringkasan Kontak WhatsApp Terdaftar")
+                wa_df_refresh = fetch_wa_contacts()
+                wa_kelas_refresh = wa_df_refresh[wa_df_refresh['Kelas'] == my_class] if not wa_df_refresh.empty else pd.DataFrame(columns=['Kelas', 'Nama Siswa', 'No WA'])
+                render_paginated_dataframe(wa_kelas_refresh, key_prefix=f"wa_kelas_{my_class}")
+                st.caption("*Catatan: Kontak WhatsApp juga terisi otomatis apabila Guru Piket menginput nomor baru saat mencatat Keterlambatan Siswa.")
 
         if st.session_state.user_role == "Ketua Kelas":
             with tab_flag:
@@ -841,10 +909,8 @@ else:
             students = get_master_students(p_class)
             
             if students:
-                # Siswa dipilih DI LUAR form untuk mengaktifkan Dynamic Lookup
                 sel_student = st.selectbox("Nama Siswa:", students, key="late_sel_student")
                 
-                # Tarik Data WA dari cache
                 wa_df = fetch_wa_contacts()
                 existing_wa = ""
                 if not wa_df.empty and 'Nama Siswa' in wa_df.columns:
@@ -857,7 +923,6 @@ else:
                     
                     st.write("---")
                     st.markdown("##### 📱 Notifikasi WhatsApp Orang Tua (Fonnte)")
-                    # Auto-fill WA
                     p_phone = st.text_input("Nomor WA Orang Tua / Wali (Contoh: 08123456789):", value=existing_wa, key="late_phone_no")
                     send_wa = st.checkbox("📲 Kirim Notifikasi WhatsApp Otomatis ke Orang Tua", value=True, key="late_send_wa_check")
 
@@ -865,7 +930,6 @@ else:
                         if save_lateness_entry(p_date, p_class, sel_student, late_min, "Guru Piket"):
                             st.success(f"🎉 Berhasil mencatat keterlambatan {late_min} menit untuk {sel_student}!")
                             
-                            # Cek dan Update WA Database
                             if p_phone.strip() and p_phone.strip() != existing_wa:
                                 update_wa_contact(p_class, sel_student, p_phone.strip())
                             
@@ -935,7 +999,6 @@ else:
             
             with col_df_l:
                 st.markdown("##### ⏱️ Riwayat Keterlambatan (Piket)")
-                # Terapkan paginasi
                 if not c_late.empty: 
                     render_paginated_dataframe(c_late.sort_values(by='Tanggal', ascending=False), key_prefix=f"bk_late_{target_c}", rows_per_page=10)
                 else: 
@@ -943,7 +1006,6 @@ else:
             
             with col_df_f:
                 st.markdown("##### 🚩 Riwayat Catatan Perilaku Guru")
-                # Terapkan paginasi
                 if not c_flags.empty: 
                     render_paginated_dataframe(c_flags.sort_values(by='Tanggal', ascending=False), key_prefix=f"bk_flags_{target_c}", rows_per_page=10)
                 else: 
@@ -1004,7 +1066,6 @@ else:
                 df_counsel = fetch_counseling_logs()
                 if not df_counsel.empty and 'Kelas' in df_counsel.columns:
                     c_history = df_counsel[df_counsel['Kelas'] == target_c]
-                    # Terapkan Paginasi
                     if not c_history.empty: 
                         render_paginated_dataframe(c_history.sort_values(by='Tanggal', ascending=False), key_prefix=f"bk_counsel_{target_c}", rows_per_page=10)
                     else: 
