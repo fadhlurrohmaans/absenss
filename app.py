@@ -331,70 +331,91 @@ def get_calendar_config(selected_month):
             else: col_config[col_name] = st.column_config.TextColumn(label=f"{i} ({day_name})")
     return col_config, disabled_cols, monthly_holidays
 
+# --- OPTIMIZED PANDAS VECTORIZATION ENGINE ---
 def generate_full_report(df):
     df_report = df.copy()
-    s_list, i_list, a_list, h_list = [], [], [], []
-    pct_h_list, pct_i_list, pct_a_list, pct_s_list = [], [], [], []
     
-    active_date_cols = [c for c in date_cols if any(str(v).strip().upper() in ['H', 'S', 'I', 'A', '.', 'V'] for v in df_report[c].values)]
+    cols_to_check = [c for c in date_cols if c in df_report.columns]
+    if not cols_to_check:
+        for col in ['S', 'I', 'A', 'Hadir']: df_report[col] = 0
+        for col in ['% Hadir', '% Izin', '% Alpha', '% Sakit']: df_report[col] = "0%"
+        return df_report
 
-    for _, row in df_report.iterrows():
-        s, i, a, h = 0, 0, 0, 0
-        if not active_date_cols:
-            s_list.append(0); i_list.append(0); a_list.append(0); h_list.append(0)
-            pct_h_list.append("0%"); pct_i_list.append("0%"); pct_a_list.append("0%"); pct_s_list.append("0%")
-            continue
+    # Deteksi kolom aktif secara tervektorisasi
+    matrix_raw = df_report[cols_to_check].astype(str).apply(lambda x: x.str.strip().str.upper())
+    is_mark = matrix_raw.isin(['H', 'S', 'I', 'A', '.', 'V', 'HADIR', 'SAKIT', 'IJIN', 'IZIN', 'ALPHA', 'ALPA'])
+    active_cols = matrix_raw.columns[is_mark.any(axis=0)].tolist()
 
-        for col in active_date_cols:
-            val = str(row[col]).strip().upper()
-            if val in ['S', 'SAKIT']: s += 1
-            elif val in ['I', 'IJIN', 'IZIN']: i += 1
-            elif val in ['A', 'ALPHA', 'ALPA']: a += 1
-            elif val in ['H', 'HADIR', '.', 'V', '']: h += 1
-            
-        total = s + i + a + h
-        s_list.append(s); i_list.append(i); a_list.append(a); h_list.append(h)
-        pct_h_list.append(f"{(h / total * 100):.1f}%" if total > 0 else "0%")
-        pct_i_list.append(f"{(i / total * 100):.1f}%" if total > 0 else "0%")
-        pct_a_list.append(f"{(a / total * 100):.1f}%" if total > 0 else "0%")
-        pct_s_list.append(f"{(s / total * 100):.1f}%" if total > 0 else "0%")
+    if not active_cols:
+        for col in ['S', 'I', 'A', 'Hadir']: df_report[col] = 0
+        for col in ['% Hadir', '% Izin', '% Alpha', '% Sakit']: df_report[col] = "0%"
+        return df_report
 
-    df_report['S'], df_report['I'], df_report['A'], df_report['Hadir'] = s_list, i_list, a_list, h_list
-    df_report['% Hadir'], df_report['% Izin'], df_report['% Alpha'], df_report['% Sakit'] = pct_h_list, pct_i_list, pct_a_list, pct_s_list
+    matrix = matrix_raw[active_cols]
+    
+    # Hitung penjumlahan per baris secara otomatis tanpa iterrows()
+    df_report['S'] = matrix.isin(['S', 'SAKIT']).sum(axis=1)
+    df_report['I'] = matrix.isin(['I', 'IJIN', 'IZIN']).sum(axis=1)
+    df_report['A'] = matrix.isin(['A', 'ALPHA', 'ALPA']).sum(axis=1)
+    df_report['Hadir'] = matrix.isin(['H', 'HADIR', '.', 'V', '']).sum(axis=1)
+
+    total = df_report['S'] + df_report['I'] + df_report['A'] + df_report['Hadir']
+    safe_total = total.replace(0, 1)
+
+    df_report['% Hadir'] = (df_report['Hadir'] / safe_total * 100).round(1).astype(str) + '%'
+    df_report['% Izin'] = (df_report['I'] / safe_total * 100).round(1).astype(str) + '%'
+    df_report['% Alpha'] = (df_report['A'] / safe_total * 100).round(1).astype(str) + '%'
+    df_report['% Sakit'] = (df_report['S'] / safe_total * 100).round(1).astype(str) + '%'
+
+    zero_mask = (total == 0)
+    if zero_mask.any():
+        df_report.loc[zero_mask, ['% Hadir', '% Izin', '% Alpha', '% Sakit']] = "0%"
+
     return df_report
 
 def calculate_period_recap(kelas, target_months):
     master_names = get_master_students(kelas)
-    recap = {name: {'S': 0, 'I': 0, 'A': 0, 'Hadir': 0} for name in master_names}
+    if not master_names:
+        return pd.DataFrame(columns=['No', 'Nama Siswa', 'Sakit (S)', 'Izin (I)', 'Alpha (A)', 'Total Hadir (H)', 'Total Hari Efektif', '% Hadir', '% Izin', '% Alpha', '% Sakit'])
+
+    df_recap = pd.DataFrame({'Nama Siswa': master_names, 'S': 0, 'I': 0, 'A': 0, 'Hadir': 0})
     existing_sheets = get_existing_worksheet_names()
-    
+
+    dfs = []
     for m in target_months:
         sheet_name = f"{kelas}_{m}"
-        if sheet_name not in existing_sheets:
-            continue
-        df_m = fetch_attendance_data_from_cache(kelas, m)
-        rep_m = generate_full_report(df_m)
-        for _, row in rep_m.iterrows():
-            nama = str(row['Nama Siswa']).strip()
-            if nama in recap:
-                recap[nama]['S'] += int(row['S'])
-                recap[nama]['I'] += int(row['I'])
-                recap[nama]['A'] += int(row['A'])
-                recap[nama]['Hadir'] += int(row['Hadir'])
-                
-    rows = []
-    for idx, nama in enumerate(master_names, 1):
-        s, i, a, h = recap[nama]['S'], recap[nama]['I'], recap[nama]['A'], recap[nama]['Hadir']
-        tot = s + i + a + h
-        rows.append({
-            'No': idx, 'Nama Siswa': nama, 'Sakit (S)': s, 'Izin (I)': i, 'Alpha (A)': a,
-            'Total Hadir (H)': h, 'Total Hari Efektif': tot,
-            '% Hadir': f"{(h / tot * 100):.1f}%" if tot > 0 else "0%",
-            '% Izin': f"{(i / tot * 100):.1f}%" if tot > 0 else "0%",
-            '% Alpha': f"{(a / tot * 100):.1f}%" if tot > 0 else "0%",
-            '% Sakit': f"{(s / tot * 100):.1f}%" if tot > 0 else "0%"
-        })
-    return pd.DataFrame(rows)
+        if sheet_name in existing_sheets:
+            df_m = fetch_attendance_data_from_cache(kelas, m)
+            rep_m = generate_full_report(df_m)
+            if not rep_m.empty and 'Nama Siswa' in rep_m.columns:
+                dfs.append(rep_m[['Nama Siswa', 'S', 'I', 'A', 'Hadir']])
+
+    if dfs:
+        combined = pd.concat(dfs, ignore_index=True)
+        combined['Nama Siswa'] = combined['Nama Siswa'].astype(str).str.strip()
+        grouped = combined.groupby('Nama Siswa', as_index=False)[['S', 'I', 'A', 'Hadir']].sum()
+        df_recap = df_recap[['Nama Siswa']].merge(grouped, on='Nama Siswa', how='left').fillna(0)
+
+    df_recap['Sakit (S)'] = df_recap['S'].astype(int)
+    df_recap['Izin (I)'] = df_recap['I'].astype(int)
+    df_recap['Alpha (A)'] = df_recap['A'].astype(int)
+    df_recap['Total Hadir (H)'] = df_recap['Hadir'].astype(int)
+
+    tot = df_recap['Sakit (S)'] + df_recap['Izin (I)'] + df_recap['Alpha (A)'] + df_recap['Total Hadir (H)']
+    df_recap['Total Hari Efektif'] = tot
+    safe_tot = tot.replace(0, 1)
+
+    df_recap['% Hadir'] = (df_recap['Total Hadir (H)'] / safe_tot * 100).round(1).astype(str) + '%'
+    df_recap['% Izin'] = (df_recap['Izin (I)'] / safe_tot * 100).round(1).astype(str) + '%'
+    df_recap['% Alpha'] = (df_recap['Alpha (A)'] / safe_tot * 100).round(1).astype(str) + '%'
+    df_recap['% Sakit'] = (df_recap['Sakit (S)'] / safe_tot * 100).round(1).astype(str) + '%'
+
+    zero_mask = (tot == 0)
+    if zero_mask.any():
+        df_recap.loc[zero_mask, ['% Hadir', '% Izin', '% Alpha', '% Sakit']] = "0%"
+
+    df_recap.insert(0, 'No', range(1, len(df_recap) + 1))
+    return df_recap[['No', 'Nama Siswa', 'Sakit (S)', 'Izin (I)', 'Alpha (A)', 'Total Hadir (H)', 'Total Hari Efektif', '% Hadir', '% Izin', '% Alpha', '% Sakit']]
 
 # --- 6. OPTIMIZED BATCH RISK SCORING ENGINE ---
 def get_class_alpa_summary(kelas, existing_sheets=None):
@@ -402,18 +423,23 @@ def get_class_alpa_summary(kelas, existing_sheets=None):
     alpa_map = {s: 0 for s in students}
     if existing_sheets is None:
         existing_sheets = get_existing_worksheet_names()
-        
+
+    dfs = []
     for m in months:
         sheet_name = f"{kelas}_{m}"
-        if sheet_name not in existing_sheets:
-            continue
-            
-        df_m = fetch_attendance_data_from_cache(kelas, m)
-        rep = generate_full_report(df_m)
-        for _, row in rep.iterrows():
-            nama = str(row['Nama Siswa']).strip()
+        if sheet_name in existing_sheets:
+            df_m = fetch_attendance_data_from_cache(kelas, m)
+            rep = generate_full_report(df_m)
+            if not rep.empty and 'Nama Siswa' in rep.columns and 'A' in rep.columns:
+                dfs.append(rep[['Nama Siswa', 'A']])
+
+    if dfs:
+        combined = pd.concat(dfs, ignore_index=True)
+        combined['Nama Siswa'] = combined['Nama Siswa'].astype(str).str.strip()
+        grouped = combined.groupby('Nama Siswa')['A'].sum()
+        for nama, a_val in grouped.items():
             if nama in alpa_map:
-                alpa_map[nama] += int(row['A'])
+                alpa_map[nama] = int(a_val)
     return alpa_map
 
 def calculate_class_risk_table(kelas, df_late_all=None, df_flags_all=None, existing_sheets=None):
@@ -507,7 +533,6 @@ if not st.session_state.logged_in:
             if st.form_submit_button("🔑 Masuk Ke Ruang Kelas", type="primary"):
                 passwords = fetch_config_passwords()
                 
-                # Logika penentuan login key
                 if role_wali == "Sekretaris Kelas": login_key = target_class
                 elif role_wali == "Wali Kelas": login_key = f"Wali{target_class}"
                 elif role_wali == "Ketua Kelas": login_key = f"KK{target_class}"
@@ -544,7 +569,6 @@ else:
         my_class = st.session_state.assigned_class
         st.title(f"🏫 Ruang Kerja {st.session_state.user_role} {my_class}")
         
-        # Pengaturan pembagian Tab sesuai hak akses
         if st.session_state.user_role == "Wali Kelas":
             tabs = st.tabs([
                 "📝 Isi Absensi Bulanan (Grid)", 
@@ -562,7 +586,6 @@ else:
             tabs = st.tabs(["🚩 Lapor Perilaku Siswa (Khusus Negatif)"])
             tab_flag = tabs[0]
         
-        # Eksekusi Tab Absensi HANYA untuk Sekretaris dan Wali Kelas
         if st.session_state.user_role in ["Sekretaris Kelas", "Wali Kelas"]:
             with tab_absen:
                 selected_month = st.selectbox("📅 Pilih Bulan Absensi:", months)
