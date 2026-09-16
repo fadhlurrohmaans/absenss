@@ -85,7 +85,6 @@ except Exception as e:
     st.stop()
 
 def execute_write_with_retry(func, *args, **kwargs):
-    """Fungsi pembungkus operasi WRITE ke Google Sheets dengan Exponential Backoff untuk mengatasi Error 429 Write Quota."""
     max_retries = 5
     for attempt in range(max_retries):
         try:
@@ -104,7 +103,6 @@ def execute_write_with_retry(func, *args, **kwargs):
 
 # --- FONNTE WHATSAPP GATEWAY INTEGRATION ---
 def send_whatsapp_fonnte(target, message, token=None):
-    """Mengirim pesan notifikasi WhatsApp via Fonnte Gateway API."""
     if not token:
         token = st.secrets.get("FONNTE_TOKEN", "")
     if not token:
@@ -154,6 +152,52 @@ def fetch_sheet_with_retry(sheet_name):
         except Exception:
             return pd.DataFrame()
     return pd.DataFrame()
+
+# --- FITUR BARU: MANAJEMEN KONTAK WHATSAPP ---
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_wa_contacts():
+    df = fetch_sheet_with_retry("KONTAK_WA")
+    if df.empty or 'Nama Siswa' not in df.columns:
+        return pd.DataFrame(columns=['Kelas', 'Nama Siswa', 'No WA'])
+    return df
+
+def update_wa_contact(kelas, nama, no_wa):
+    df = fetch_wa_contacts()
+    mask = (df['Kelas'] == kelas) & (df['Nama Siswa'] == nama)
+    
+    if mask.any():
+        df.loc[mask, 'No WA'] = no_wa
+    else:
+        new_row = pd.DataFrame([{'Kelas': kelas, 'Nama Siswa': nama, 'No WA': no_wa}])
+        df = pd.concat([df, new_row], ignore_index=True)
+    
+    try:
+        ws = sh.worksheet("KONTAK_WA")
+    except WorksheetNotFound:
+        ws = execute_write_with_retry(sh.add_worksheet, "KONTAK_WA", rows="1000", cols="5")
+        get_existing_worksheet_names.clear()
+        
+    execute_write_with_retry(ws.clear)
+    execute_write_with_retry(ws.update, range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+    fetch_wa_contacts.clear()
+    fetch_sheet_with_retry.clear("KONTAK_WA")
+    return True
+
+# --- FITUR BARU: PAGINASI DATAFRAME ---
+def render_paginated_dataframe(df, key_prefix, rows_per_page=10):
+    if df.empty:
+        st.info("Belum ada data.")
+        return
+    total_pages = max(1, (len(df) - 1) // rows_per_page + 1)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        page = st.number_input(f"Halaman (Total: {total_pages})", min_value=1, max_value=total_pages, value=1, key=f"{key_prefix}_page")
+    
+    start_idx = (page - 1) * rows_per_page
+    end_idx = start_idx + rows_per_page
+    
+    st.dataframe(df.iloc[start_idx:end_idx], use_container_width=True, hide_index=True)
 
 # --- 3. MASTER SISWA & CONFIG ---
 @st.cache_data(ttl=300, show_spinner=False)
@@ -754,6 +798,14 @@ else:
                     save_master_students(my_class, new_names)
                     st.success("🎉 Daftar nama berhasil diselaraskan!")
                     st.rerun()
+                
+                # Integrasi Database WA ke Wali Kelas
+                st.write("---")
+                st.subheader("📱 Manajemen Kontak WhatsApp Orang Tua")
+                wa_df = fetch_wa_contacts()
+                wa_kelas = wa_df[wa_df['Kelas'] == my_class] if not wa_df.empty else pd.DataFrame(columns=['Kelas', 'Nama Siswa', 'No WA'])
+                render_paginated_dataframe(wa_kelas, key_prefix=f"wa_kelas_{my_class}")
+                st.caption("*Kontak WhatsApp otomatis tertambah apabila Guru Piket mencatat nomor baru di form keterlambatan.")
 
         if st.session_state.user_role == "Ketua Kelas":
             with tab_flag:
@@ -780,25 +832,42 @@ else:
     elif st.session_state.user_role == "Guru Piket / Pelajaran":
         st.title("🕵️‍♂️ Modul Guru Piket & Pelajaran")
         tab_piket_input, tab_flagging = st.tabs(["⏱️ Input Presensi & Keterlambatan", "🚩 Fitur Flagging Perilaku"])
+        
         with tab_piket_input:
             col_p1, col_p2, col_p3 = st.columns(3)
             with col_p1: p_class = st.selectbox("Pilih Kelas:", classes, key="piket_c")
             with col_p2: p_month = st.selectbox("Pilih Bulan:", months, key="piket_m")
             with col_p3: p_date = st.date_input("Tanggal Transaksi:", datetime.date.today())
             students = get_master_students(p_class)
+            
             if students:
+                # Siswa dipilih DI LUAR form untuk mengaktifkan Dynamic Lookup
+                sel_student = st.selectbox("Nama Siswa:", students, key="late_sel_student")
+                
+                # Tarik Data WA dari cache
+                wa_df = fetch_wa_contacts()
+                existing_wa = ""
+                if not wa_df.empty and 'Nama Siswa' in wa_df.columns:
+                    match = wa_df[(wa_df['Kelas'] == p_class) & (wa_df['Nama Siswa'] == sel_student)]
+                    if not match.empty:
+                        existing_wa = str(match.iloc[0]['No WA'])
+                
                 with st.form("form_late"):
-                    sel_student = st.selectbox("Nama Siswa:", students)
                     late_min = st.number_input("Keterlambatan (Dalam Menit):", min_value=0, step=5, value=15)
                     
                     st.write("---")
                     st.markdown("##### 📱 Notifikasi WhatsApp Orang Tua (Fonnte)")
-                    p_phone = st.text_input("Nomor WA Orang Tua / Wali (Contoh: 08123456789):", key="late_phone_no")
+                    # Auto-fill WA
+                    p_phone = st.text_input("Nomor WA Orang Tua / Wali (Contoh: 08123456789):", value=existing_wa, key="late_phone_no")
                     send_wa = st.checkbox("📲 Kirim Notifikasi WhatsApp Otomatis ke Orang Tua", value=True, key="late_send_wa_check")
 
                     if st.form_submit_button("💾 Catat Keterlambatan & Kirim Notifikasi", type="primary"):
                         if save_lateness_entry(p_date, p_class, sel_student, late_min, "Guru Piket"):
                             st.success(f"🎉 Berhasil mencatat keterlambatan {late_min} menit untuk {sel_student}!")
+                            
+                            # Cek dan Update WA Database
+                            if p_phone.strip() and p_phone.strip() != existing_wa:
+                                update_wa_contact(p_class, sel_student, p_phone.strip())
                             
                             if send_wa and p_phone.strip():
                                 wa_msg = (
@@ -863,14 +932,22 @@ else:
             col_bk3.metric("✨ Catatan Perilaku Positif", f"{len(c_flags[c_flags['Tipe'] == 'POSITIF']) if not c_flags.empty else 0} Apresiasi")
             st.write("---")
             col_df_l, col_df_f = st.columns(2)
+            
             with col_df_l:
                 st.markdown("##### ⏱️ Riwayat Keterlambatan (Piket)")
-                if not c_late.empty: st.dataframe(c_late.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
-                else: st.info("Belum ada catatan keterlambatan untuk kelas ini.")
+                # Terapkan paginasi
+                if not c_late.empty: 
+                    render_paginated_dataframe(c_late.sort_values(by='Tanggal', ascending=False), key_prefix=f"bk_late_{target_c}", rows_per_page=10)
+                else: 
+                    st.info("Belum ada catatan keterlambatan untuk kelas ini.")
+            
             with col_df_f:
                 st.markdown("##### 🚩 Riwayat Catatan Perilaku Guru")
-                if not c_flags.empty: st.dataframe(c_flags.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
-                else: st.info("Belum ada riwayat flagging perilaku dari guru.")
+                # Terapkan paginasi
+                if not c_flags.empty: 
+                    render_paginated_dataframe(c_flags.sort_values(by='Tanggal', ascending=False), key_prefix=f"bk_flags_{target_c}", rows_per_page=10)
+                else: 
+                    st.info("Belum ada riwayat flagging perilaku dari guru.")
 
         with tab_exec_risk:
             st.subheader(f"🛡️ Sistem Risk Scoring & Tren Kedisiplinan - Kelas {target_c}")
@@ -927,9 +1004,13 @@ else:
                 df_counsel = fetch_counseling_logs()
                 if not df_counsel.empty and 'Kelas' in df_counsel.columns:
                     c_history = df_counsel[df_counsel['Kelas'] == target_c]
-                    if not c_history.empty: st.dataframe(c_history.sort_values(by='Tanggal', ascending=False), use_container_width=True, hide_index=True)
-                    else: st.info("Belum ada riwayat konseling untuk kelas ini.")
-                else: st.info("Belum ada data konseling tersimpan di database.")
+                    # Terapkan Paginasi
+                    if not c_history.empty: 
+                        render_paginated_dataframe(c_history.sort_values(by='Tanggal', ascending=False), key_prefix=f"bk_counsel_{target_c}", rows_per_page=10)
+                    else: 
+                        st.info("Belum ada riwayat konseling untuk kelas ini.")
+                else: 
+                    st.info("Belum ada data konseling tersimpan di database.")
 
     # 4. KEPALA SEKOLAH
     elif st.session_state.user_role == "Kepala Sekolah":
