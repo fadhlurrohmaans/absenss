@@ -867,13 +867,6 @@ else:
                     
                     st.success("🎉 Daftar nama siswa dan kontak WhatsApp orang tua berhasil disimpan!")
                     st.rerun()
-                
-                st.write("---")
-                st.subheader("📱 Ringkasan Kontak WhatsApp Terdaftar")
-                wa_df_refresh = fetch_wa_contacts()
-                wa_kelas_refresh = wa_df_refresh[wa_df_refresh['Kelas'] == my_class] if not wa_df_refresh.empty else pd.DataFrame(columns=['Kelas', 'Nama Siswa', 'No WA'])
-                render_paginated_dataframe(wa_kelas_refresh, key_prefix=f"wa_kelas_{my_class}")
-                st.caption("*Catatan: Kontak WhatsApp juga terisi otomatis apabila Guru Piket menginput nomor baru saat mencatat Keterlambatan Siswa.")
 
         if st.session_state.user_role == "Ketua Kelas":
             with tab_flag:
