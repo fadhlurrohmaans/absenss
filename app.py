@@ -7,6 +7,7 @@ import datetime
 import calendar
 import time
 import io
+import requests
 
 # --- 0. KONFIGURASI KALENDER & LIBUR NASIONAL ---
 try:
@@ -69,7 +70,7 @@ def get_year_for_month(month_name):
 
 initial_students = ['ACHMAD FAIRUZ', 'ADARA DWI NOVITA', 'ADELAMULIA PUTRI FAJARINO', 'AHMAD DENIS RUBIANSYAH']
 
-# --- 1. KONEKSI GOOGLE SHEETS ---
+# --- 1. KONEKSI GOOGLE SHEETS & RETRY HELPER ---
 @st.cache_resource(show_spinner=False)
 def get_gspread_spreadsheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -83,8 +84,52 @@ except Exception as e:
     st.error(f"❌ Gagal terhubung ke Database Google Sheets: {e}")
     st.stop()
 
-# --- CACHE NAMA WORKSHEET ---
-@st.cache_data(ttl=300, show_spinner=False)
+def execute_write_with_retry(func, *args, **kwargs):
+    """Fungsi pembungkus operasi WRITE ke Google Sheets dengan Exponential Backoff untuk mengatasi Error 429 Write Quota."""
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except APIError as e:
+            if ("429" in str(e) or "QUOTA_EXCEEDED" in str(e).upper()) and attempt < max_retries - 1:
+                time.sleep((2 ** (attempt + 1)) + 1)
+                continue
+            raise e
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                time.sleep((2 ** (attempt + 1)) + 1)
+                continue
+            raise e
+    raise Exception("Batas maksimum percobaan penulisan ke API Google Sheets tercapai.")
+
+# --- FONNTE WHATSAPP GATEWAY INTEGRATION ---
+def send_whatsapp_fonnte(target, message, token=None):
+    """Mengirim pesan notifikasi WhatsApp via Fonnte Gateway API."""
+    if not token:
+        token = st.secrets.get("FONNTE_TOKEN", "")
+    if not token:
+        return False, "Token Fonnte belum dikonfigurasi di `.streamlit/secrets.toml` (Key: FONNTE_TOKEN)."
+    
+    url = "https://api.fonnte.com/send"
+    headers = {"Authorization": token}
+    payload = {
+        "target": target,
+        "message": message,
+        "countryCode": "62"
+    }
+    try:
+        response = requests.post(url, headers=headers, data=payload, timeout=10)
+        res_json = response.json()
+        if res_json.get("status"):
+            return True, "Notifikasi WhatsApp berhasil terkirim ke Orang Tua."
+        else:
+            reason = res_json.get("reason", "Respon gagal dari Fonnte.")
+            return False, f"Gagal Fonnte: {reason}"
+    except Exception as e:
+        return False, f"Error koneksi WA Gateway: {e}"
+
+# --- CACHE STRATEGIS DENGAN TTL LEBIH PENDEK & SELEKTIF ---
+@st.cache_data(ttl=120, show_spinner=False)
 def get_existing_worksheet_names():
     try:
         return [ws.title for ws in sh.worksheets()]
@@ -92,7 +137,7 @@ def get_existing_worksheet_names():
         return []
 
 # --- 2. LAZY FETCHING DENGAN CACHE & RETRY ---
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def fetch_sheet_with_retry(sheet_name):
     max_retries = 5
     for attempt in range(max_retries):
@@ -103,7 +148,7 @@ def fetch_sheet_with_retry(sheet_name):
             return pd.DataFrame()
         except APIError as e:
             if "429" in str(e) and attempt < max_retries - 1:
-                time.sleep(2 ** (attempt + 1))
+                time.sleep((2 ** (attempt + 1)) + 1)
                 continue
             return pd.DataFrame()
         except Exception:
@@ -111,7 +156,7 @@ def fetch_sheet_with_retry(sheet_name):
     return pd.DataFrame()
 
 # --- 3. MASTER SISWA & CONFIG ---
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_master_df():
     df = fetch_sheet_with_retry("MASTER_SISWA")
     if df.empty:
@@ -136,20 +181,20 @@ def save_master_students(kelas, name_list):
     df = df.fillna("")
     
     ws = sh.worksheet("MASTER_SISWA")
-    ws.clear()
-    ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+    execute_write_with_retry(ws.clear)
+    execute_write_with_retry(ws.update, range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_all_master_df.clear()
     fetch_sheet_with_retry.clear("MASTER_SISWA")
 
 def save_all_master_df(df_master):
     df_master = df_master.fillna("")
     ws = sh.worksheet("MASTER_SISWA")
-    ws.clear()
-    ws.update(range_name='A1', values=[df_master.columns.values.tolist()] + df_master.values.tolist())
+    execute_write_with_retry(ws.clear)
+    execute_write_with_retry(ws.update, range_name='A1', values=[df_master.columns.values.tolist()] + df_master.values.tolist())
     fetch_all_master_df.clear()
     fetch_sheet_with_retry.clear("MASTER_SISWA")
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_config_passwords():
     df = fetch_sheet_with_retry("CONFIG")
     if not df.empty and 'Key' in df.columns and 'Password' in df.columns:
@@ -166,14 +211,14 @@ def fetch_config_passwords():
 
 def save_config_passwords(password_dict):
     ws = sh.worksheet("CONFIG")
-    ws.clear()
+    execute_write_with_retry(ws.clear)
     df = pd.DataFrame(list(password_dict.items()), columns=['Key', 'Password'])
-    ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+    execute_write_with_retry(ws.update, range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_config_passwords.clear()
     fetch_sheet_with_retry.clear("CONFIG")
 
 # --- KONFIGURASI PESAN POP-UP HALAMAN AWAL ---
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_popup_config():
     config = fetch_config_passwords()
     return {
@@ -197,10 +242,11 @@ def save_lateness_entry(tanggal, kelas, nama, menit, pencatat):
     try:
         try: ws = sh.worksheet("LOG_KETERLAMBATAN")
         except WorksheetNotFound:
-            ws = sh.add_worksheet("LOG_KETERLAMBATAN", rows="1000", cols="10")
-            ws.append_row(['Tanggal', 'Kelas', 'Nama Siswa', 'Menit Terlambat', 'Pencatat'])
+            ws = execute_write_with_retry(sh.add_worksheet, "LOG_KETERLAMBATAN", rows="1000", cols="10")
+            execute_write_with_retry(ws.append_row, ['Tanggal', 'Kelas', 'Nama Siswa', 'Menit Terlambat', 'Pencatat'])
             get_existing_worksheet_names.clear()
-        ws.append_row([str(tanggal), kelas, nama, int(menit), pencatat])
+        
+        execute_write_with_retry(ws.append_row, [str(tanggal), kelas, nama, int(menit), pencatat])
         fetch_sheet_with_retry.clear("LOG_KETERLAMBATAN")
         return True
     except Exception as e:
@@ -227,7 +273,7 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
                 try:
                     new_catatan = existing_catatan + " | " + catatan.strip()
                     ws = sh.worksheet("FLAGS_PERILAKU")
-                    ws.update_cell(int(idx) + 2, 7, new_catatan)
+                    execute_write_with_retry(ws.update_cell, int(idx) + 2, 7, new_catatan)
                     fetch_sheet_with_retry.clear("FLAGS_PERILAKU")
                     return True, "✅ Catatan baru berhasil ditambahkan pada record flagging hari ini!"
                 except Exception as e:
@@ -236,11 +282,11 @@ def save_flag_entry(tanggal, kelas, nama, tipe, kategori, catatan, pencatat):
     try:
         try: ws = sh.worksheet("FLAGS_PERILAKU")
         except WorksheetNotFound:
-            ws = sh.add_worksheet("FLAGS_PERILAKU", rows="1000", cols="10")
-            ws.append_row(['Tanggal', 'TahunMinggu', 'Kelas', 'Nama Siswa', 'Tipe', 'Kategori', 'Catatan', 'Pencatat'])
+            ws = execute_write_with_retry(sh.add_worksheet, "FLAGS_PERILAKU", rows="1000", cols="10")
+            execute_write_with_retry(ws.append_row, ['Tanggal', 'TahunMinggu', 'Kelas', 'Nama Siswa', 'Tipe', 'Kategori', 'Catatan', 'Pencatat'])
             get_existing_worksheet_names.clear()
             
-        ws.append_row([str(dt), year_week, kelas, nama, tipe, kategori, catatan, pencatat])
+        execute_write_with_retry(ws.append_row, [str(dt), year_week, kelas, nama, tipe, kategori, catatan, pencatat])
         fetch_sheet_with_retry.clear("FLAGS_PERILAKU")
         return True, "✅ Flagging perilaku berhasil dicatat!"
     except Exception as e: return False, f"Gagal menyimpan flag: {e}"
@@ -251,11 +297,11 @@ def save_counseling_log(tanggal, kelas, nama, ringkasan, rekomendasi, status, ko
     try:
         try: ws = sh.worksheet("KONSELING_BK")
         except WorksheetNotFound:
-            ws = sh.add_worksheet("KONSELING_BK", rows="500", cols="10")
-            ws.append_row(['ID', 'Tanggal', 'Kelas', 'Nama Siswa', 'Ringkasan', 'Rekomendasi', 'Status', 'Konselor'])
+            ws = execute_write_with_retry(sh.add_worksheet, "KONSELING_BK", rows="500", cols="10")
+            execute_write_with_retry(ws.append_row, ['ID', 'Tanggal', 'Kelas', 'Nama Siswa', 'Ringkasan', 'Rekomendasi', 'Status', 'Konselor'])
             get_existing_worksheet_names.clear()
         c_id = f"BK-{int(datetime.datetime.now().timestamp())}"
-        ws.append_row([c_id, str(tanggal), kelas, nama, ringkasan, rekomendasi, status, konselor])
+        execute_write_with_retry(ws.append_row, [c_id, str(tanggal), kelas, nama, ringkasan, rekomendasi, status, konselor])
         fetch_sheet_with_retry.clear("KONSELING_BK")
         return True
     except Exception as e: return False
@@ -296,12 +342,12 @@ def save_attendance_data(kelas, month, df):
     sheet_name = f"{kelas}_{month}"
     try: ws = sh.worksheet(sheet_name)
     except Exception: 
-        ws = sh.add_worksheet(title=sheet_name, rows="100", cols="40")
+        ws = execute_write_with_retry(sh.add_worksheet, title=sheet_name, rows="100", cols="40")
         get_existing_worksheet_names.clear()
         
-    ws.clear()
+    execute_write_with_retry(ws.clear)
     df = df.fillna('').astype(str)
-    ws.update(range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
+    execute_write_with_retry(ws.update, range_name='A1', values=[df.columns.values.tolist()] + df.values.tolist())
     fetch_sheet_with_retry.clear(sheet_name)
     get_existing_worksheet_names.clear()
 
@@ -341,7 +387,6 @@ def generate_full_report(df):
         for col in ['% Hadir', '% Izin', '% Alpha', '% Sakit']: df_report[col] = "0%"
         return df_report
 
-    # Deteksi kolom aktif secara tervektorisasi
     matrix_raw = df_report[cols_to_check].astype(str).apply(lambda x: x.str.strip().str.upper())
     is_mark = matrix_raw.isin(['H', 'S', 'I', 'A', '.', 'V', 'HADIR', 'SAKIT', 'IJIN', 'IZIN', 'ALPHA', 'ALPA'])
     active_cols = matrix_raw.columns[is_mark.any(axis=0)].tolist()
@@ -353,7 +398,6 @@ def generate_full_report(df):
 
     matrix = matrix_raw[active_cols]
     
-    # Hitung penjumlahan per baris secara otomatis tanpa iterrows()
     df_report['S'] = matrix.isin(['S', 'SAKIT']).sum(axis=1)
     df_report['I'] = matrix.isin(['I', 'IJIN', 'IZIN']).sum(axis=1)
     df_report['A'] = matrix.isin(['A', 'ALPHA', 'ALPA']).sum(axis=1)
@@ -746,10 +790,32 @@ else:
                 with st.form("form_late"):
                     sel_student = st.selectbox("Nama Siswa:", students)
                     late_min = st.number_input("Keterlambatan (Dalam Menit):", min_value=0, step=5, value=15)
-                    if st.form_submit_button("💾 Catat Menit Terlambat"):
+                    
+                    st.write("---")
+                    st.markdown("##### 📱 Notifikasi WhatsApp Orang Tua (Fonnte)")
+                    p_phone = st.text_input("Nomor WA Orang Tua / Wali (Contoh: 08123456789):", key="late_phone_no")
+                    send_wa = st.checkbox("📲 Kirim Notifikasi WhatsApp Otomatis ke Orang Tua", value=True, key="late_send_wa_check")
+
+                    if st.form_submit_button("💾 Catat Keterlambatan & Kirim Notifikasi", type="primary"):
                         if save_lateness_entry(p_date, p_class, sel_student, late_min, "Guru Piket"):
-                            st.success(f"Berhasil mencatat keterlambatan {late_min} menit untuk {sel_student}!")
+                            st.success(f"🎉 Berhasil mencatat keterlambatan {late_min} menit untuk {sel_student}!")
+                            
+                            if send_wa and p_phone.strip():
+                                wa_msg = (
+                                    f"Yth. Bapak/Ibu Orang Tua/Wali dari *{sel_student}* ({p_class}).\n\n"
+                                    f"Memberitahukan bahwa siswa tercatat *TERLAMBAT* tiba di sekolah pada tanggal *{p_date}* "
+                                    f"selama *{late_min} menit*.\n\n"
+                                    f"Pencatat: Guru Piket Sekolah.\n"
+                                    f"Mohon perhatian dan bimbingannya agar siswa hadir tepat waktu.\n\n"
+                                    f"Terima kasih.\n_Sistem Kedisiplinan Sekolah_"
+                                )
+                                wa_ok, wa_msg_status = send_whatsapp_fonnte(p_phone.strip(), wa_msg)
+                                if wa_ok:
+                                    st.info(f"📱 {wa_msg_status}")
+                                else:
+                                    st.warning(f"⚠️ {wa_msg_status}")
             else: st.warning("Daftar siswa belum diisi di kelas ini.")
+            
         with tab_flagging:
             st.subheader("🚩 Form Flagging Perilaku Siswa")
             f_class = st.selectbox("Kelas Siswa:", classes, key="flag_c")
